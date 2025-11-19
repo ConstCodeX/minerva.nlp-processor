@@ -10,6 +10,7 @@ class Article:
     description: Optional[str]
     content_code: Optional[str]
     url: Optional[str]
+    category: str = "General"  # Categoría ya asignada en la BD
 
 @dataclass
 class TopicData:

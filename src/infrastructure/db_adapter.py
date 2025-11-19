@@ -12,13 +12,13 @@ class NeonDBAdapter(ArticleRepository):
         self.conn_string = os.environ.get("DATABASE_URL")
 
     def fetch_unprocessed_articles(self) -> List[Article]:
-        """Obtiene artículos sin topic_id asignado."""
+        """Obtiene artículos sin topic_id asignado con su categoría."""
         conn = psycopg2.connect(self.conn_string)
         cursor = conn.cursor()
         
-        # Obtiene TODOS los artículos sin procesar (sin topic_id)
+        # Obtiene TODOS los artículos sin procesar (sin topic_id) con categoría
         cursor.execute("""
-            SELECT id, title, description, url, content_code 
+            SELECT id, title, description, url, content_code, category 
             FROM articles 
             WHERE topic_id IS NULL 
             ORDER BY publication_date DESC;
@@ -30,7 +30,8 @@ class NeonDBAdapter(ArticleRepository):
                 title=row[1], 
                 description=row[2], 
                 content_code=row[3],
-                url=row[4]
+                url=row[4],
+                category=row[5] or "General"  # Si no tiene categoría, asignar General
             ) 
             for row in cursor.fetchall()
         ]

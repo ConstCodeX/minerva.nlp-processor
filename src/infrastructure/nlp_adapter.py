@@ -146,11 +146,11 @@ class NLPAdapter(NLPService):
                 discarded += 1
                 continue
             
-            # 2. Categorizar
-            text_combined = f"{article.title} {article.description or ''}"
-            category = self.categorize_article(text_combined)
+            # 2. Usar categoría ya asignada (no recategorizar)
+            category = article.category if hasattr(article, 'category') and article.category else "General"
             
             # 3. Extraer keywords (rápido)
+            text_combined = f"{article.title} {article.description or ''}"
             processed_text = self.preprocess(text_combined)
             keywords = self.extract_keywords(processed_text, 10)
             
