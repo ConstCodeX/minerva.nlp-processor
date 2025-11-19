@@ -24,11 +24,5 @@ class NewsProcessingService:
         
         # 3. Guardar los nuevos tópicos y actualizar los artículos
         for topic in processed_topics:
-            # Aquí necesitarías mapear qué artículos pertenecen a este TopicData
-            # En la implementación simplificada, asumimos todos los artículos en el cluster
-            # (En un sistema real, esta información de mapeo vendría del NLPAdapter)
-            
-            # ⚠️ Simplificación: Agrupamos todos los IDs de artículos por cluster
-            article_ids_in_topic = [a.id for a in articles] # NECESITA SER REFINADO EN EL NLPAdapter
-            
-            self._repository.save_new_topic(topic, article_ids_in_topic)
+            # Los IDs de artículos vienen directamente del TopicData
+            self._repository.save_new_topic(topic, topic.article_ids)

@@ -16,8 +16,13 @@ class NeonDBAdapter(ArticleRepository):
         conn = psycopg2.connect(self.conn_string)
         cursor = conn.cursor()
         
-        # ⚠️ Asume que 'topic_id' es la columna de enlace en la tabla 'articles'
-        cursor.execute("SELECT id, title, description, url, content_code FROM articles WHERE topic_id IS NULL LIMIT 50;")
+        # Obtiene TODOS los artículos sin procesar (sin topic_id)
+        cursor.execute("""
+            SELECT id, title, description, url, content_code 
+            FROM articles 
+            WHERE topic_id IS NULL 
+            ORDER BY publication_date DESC;
+        """)
         
         articles = [
             Article(

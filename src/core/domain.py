@@ -20,4 +20,5 @@ class TopicData:
     main_image_url: str
     priority: int
     category: str
+    article_ids: List[str]  # Lista de IDs de artículos que pertenecen a este topic
     # article_links será manejado por el adaptador de DB como JSONB
