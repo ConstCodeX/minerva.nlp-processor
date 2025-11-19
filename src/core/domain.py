@@ -11,6 +11,8 @@ class Article:
     content_code: Optional[str]
     url: Optional[str]
     category: str = "General"  # Categoría ya asignada en la BD
+    source: str = ""  # Fuente del artículo (elcomercio, la_republica, etc)
+    tags: List[str] = None  # Tags/palabras clave extraídas del contenido
 
 @dataclass
 class TopicData:
