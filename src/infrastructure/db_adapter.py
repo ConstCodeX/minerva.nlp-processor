@@ -45,8 +45,21 @@ class NeonDBAdapter(ArticleRepository):
         cursor = conn.cursor()
         
         try:
-            # 1. Preparar datos de links para JSONB (Ejemplo simplificado)
-            links_data = [{"id": aid, "url": f"url_ficticia_{aid}"} for aid in article_ids]
+            # 1. Obtener URLs reales de los artículos
+            cursor.execute("""
+                SELECT url, source, publication_date 
+                FROM articles 
+                WHERE id = ANY(%s);
+            """, (article_ids,))
+            
+            links_data = [
+                {
+                    "url": row[0],
+                    "source": row[1],
+                    "publication_date": row[2].isoformat() if row[2] else None
+                }
+                for row in cursor.fetchall()
+            ]
 
             # 2. Insertar Tópico
             insert_topic_query = """
