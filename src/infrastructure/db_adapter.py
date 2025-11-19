@@ -9,7 +9,7 @@ from src.core.domain import Article, TopicData
 class NeonDBAdapter(ArticleRepository):
     def __init__(self):
         # Cadena de conexión de Neon.tech
-        self.conn_string = os.environ.get("DATABASE_URL")
+        self.conn_string = os.environ.get("NEON_CONN_STRING")
 
     def fetch_unprocessed_articles(self) -> List[Article]:
         """Obtiene artículos sin topic_id asignado con su categoría."""
