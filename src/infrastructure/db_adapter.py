@@ -1,0 +1,75 @@
+# src/infrastructure/db_adapter.py
+import psycopg2
+import os
+import json
+from typing import List
+from src.core.ports import ArticleRepository
+from src.core.domain import Article, TopicData
+
+class NeonDBAdapter(ArticleRepository):
+    def __init__(self):
+        # Cadena de conexión de Neon.tech
+        self.conn_string = os.environ.get("DATABASE_URL")
+
+    def fetch_unprocessed_articles(self) -> List[Article]:
+        """Obtiene artículos sin topic_id asignado."""
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        # ⚠️ Asume que 'topic_id' es la columna de enlace en la tabla 'articles'
+        cursor.execute("SELECT id, title, description, url, content_code FROM articles WHERE topic_id IS NULL LIMIT 50;")
+        
+        articles = [
+            Article(
+                id=row[0], 
+                title=row[1], 
+                description=row[2], 
+                content_code=row[3],
+                url=row[4]
+            ) 
+            for row in cursor.fetchall()
+        ]
+        cursor.close()
+        conn.close()
+        return articles
+
+    def save_new_topic(self, topic: TopicData, article_ids: List[int]):
+        """Guarda el tópico y actualiza los artículos en una transacción."""
+        conn = psycopg2.connect(self.conn_string)
+        conn.autocommit = False # Inicia la transacción
+        cursor = conn.cursor()
+        
+        try:
+            # 1. Preparar datos de links para JSONB (Ejemplo simplificado)
+            links_data = [{"id": aid, "url": f"url_ficticia_{aid}"} for aid in article_ids]
+
+            # 2. Insertar Tópico
+            insert_topic_query = """
+                INSERT INTO topics (title, summary, main_image_url, priority, category, article_links, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW()) RETURNING id;
+            """
+            cursor.execute(insert_topic_query, (
+                topic.title, 
+                topic.summary, 
+                topic.main_image_url, 
+                topic.priority, 
+                topic.category, 
+                json.dumps(links_data)
+            ))
+            new_topic_id = cursor.fetchone()[0]
+
+            # 3. Actualizar Artículos
+            update_articles_query = """
+                UPDATE articles SET topic_id = %s WHERE id = ANY(%s);
+            """
+            cursor.execute(update_articles_query, (new_topic_id, article_ids))
+            
+            conn.commit()
+            print(f"Tópico #{new_topic_id} creado y {len(article_ids)} artículos actualizados.")
+        
+        except Exception as e:
+            conn.rollback()
+            print(f"Error en transacción de guardado: {e}")
+        finally:
+            cursor.close()
+            conn.close()

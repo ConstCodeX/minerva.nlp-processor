@@ -1,0 +1,8 @@
+# Conexión DB
+psycopg2-binary
+python-dotenv
+
+# Procesamiento de Datos
+pandas
+scikit-learn
+nltk # Para pre-procesamiento de texto en español

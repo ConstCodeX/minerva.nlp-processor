@@ -1,0 +1,29 @@
+# .github/workflows/nlp_processor.yml
+name: NLP Processor (Minerva)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *' # Ejecutar cada 30 minutos
+
+jobs:
+  run_nlp_processor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: minerva-nlp-processor # Ajusta si la estructura de carpetas es diferente
+        
+      - name: Run NLP Processor
+        env:
+          # Configura tu cadena de conexión como un Secret en GitHub
+          NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }} 
+        run: python main.py
+        working-directory: minerva-nlp-processor
