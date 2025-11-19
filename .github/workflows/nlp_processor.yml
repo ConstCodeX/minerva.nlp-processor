@@ -19,11 +19,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-        working-directory: minerva-nlp-processor # Ajusta si la estructura de carpetas es diferente
         
       - name: Run NLP Processor
         env:
           # Configura tu cadena de conexión como un Secret en GitHub
           NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }} 
         run: python main.py
-        working-directory: minerva-nlp-processor
