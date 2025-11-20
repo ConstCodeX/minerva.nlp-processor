@@ -12,13 +12,13 @@ class NeonDBAdapter(ArticleRepository):
         self.conn_string = os.environ.get("NEON_CONN_STRING")
 
     def fetch_unprocessed_articles(self) -> List[Article]:
-        """Obtiene artículos sin topic_id asignado con su categoría y fuente."""
+        """Obtiene artículos sin topic_id asignado con su categoría, fuente y fecha."""
         conn = psycopg2.connect(self.conn_string)
         cursor = conn.cursor()
         
-        # Obtiene TODOS los artículos sin procesar (sin topic_id) con categoría y source
+        # Obtiene TODOS los artículos sin procesar (sin topic_id) con categoría, source y publication_date
         cursor.execute("""
-            SELECT id, title, description, url, content_code, category, source 
+            SELECT id, title, description, url, content_code, category, source, publication_date 
             FROM articles 
             WHERE topic_id IS NULL 
             ORDER BY publication_date DESC;
@@ -32,7 +32,8 @@ class NeonDBAdapter(ArticleRepository):
                 content_code=row[3],
                 url=row[4],
                 category=row[5] or "General",  # Si no tiene categoría, asignar General
-                source=row[6]  # Fuente del artículo (el comercio, la república, etc)
+                source=row[6],  # Fuente del artículo (el comercio, la república, etc)
+                published_at=row[7]  # Fecha de publicación
             ) 
             for row in cursor.fetchall()
         ]
@@ -41,7 +42,7 @@ class NeonDBAdapter(ArticleRepository):
         return articles
 
     def save_new_topic(self, topic: TopicData, article_ids: List[int]):
-        """Guarda el tópico y actualiza los artículos en una transacción."""
+        """Guarda el tópico con categorización jerárquica y actualiza los artículos en una transacción."""
         conn = psycopg2.connect(self.conn_string)
         conn.autocommit = False # Inicia la transacción
         cursor = conn.cursor()
@@ -63,17 +64,27 @@ class NeonDBAdapter(ArticleRepository):
                 for row in cursor.fetchall()
             ]
 
-            # 2. Insertar Tópico
+            # 2. Insertar Tópico con nuevos campos jerárquicos
             insert_topic_query = """
-                INSERT INTO topics (title, summary, main_image_url, priority, category, article_links, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW()) RETURNING id;
+                INSERT INTO topics (
+                    title, summary, main_image_url, priority, category, 
+                    subcategory, topic_theme, country, tags, event_date,
+                    article_links, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) 
+                RETURNING id;
             """
             cursor.execute(insert_topic_query, (
                 topic.title, 
                 topic.summary, 
                 topic.main_image_url, 
                 topic.priority, 
-                topic.category, 
+                topic.category,
+                topic.subcategory,
+                topic.topic_theme,
+                topic.country,
+                topic.tags,  # Formato "#tag,#tag,#tag"
+                topic.event_date,
                 json.dumps(links_data)
             ))
             new_topic_id = cursor.fetchone()[0]
@@ -85,11 +96,11 @@ class NeonDBAdapter(ArticleRepository):
             cursor.execute(update_articles_query, (new_topic_id, article_ids))
             
             conn.commit()
-            print(f"Tópico #{new_topic_id} creado y {len(article_ids)} artículos actualizados.")
+            print(f"✓ Tópico #{new_topic_id} creado: {topic.category} → {topic.subcategory} → {topic.topic_theme} [{topic.country}] ({len(article_ids)} artículos)")
         
         except Exception as e:
             conn.rollback()
-            print(f"Error en transacción de guardado: {e}")
+            print(f"✗ Error en transacción de guardado: {e}")
         finally:
             cursor.close()
             conn.close()
