@@ -19,32 +19,13 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
-      - name: Test componentes sin BD (IA Local)
-        run: |
-          echo "🧪 Probando componentes del sistema..."
-          python test_without_db.py
           
-      - name: Run NLP Processor - Fase 1 (Tags)
+      - name: Run Complete NLP Pipeline
         env:
           NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
         run: |
-          echo "📋 FASE 1: Extrayendo tags con IA..."
-          python main_step1_tags.py
-          
-      - name: Run NLP Processor - Fase 2 (Clustering)
-        env:
-          NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
-        run: |
-          echo "🔗 FASE 2: Agrupando artículos similares..."
-          python main_step2_clustering.py
-          
-      - name: Run NLP Processor - Fase 3 (Títulos IA)
-        env:
-          NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
-        run: |
-          echo "✨ FASE 3: Generando títulos con IA..."
-          python main_step3_titles.py
+          echo "🚀 Ejecutando Pipeline Completo de NLP..."
+          python run_pipeline.py
         
       - name: Resumen
         if: always()

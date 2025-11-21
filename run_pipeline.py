@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 import sys
 import psycopg2
+import re
 
 # Agregar src al path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -331,7 +332,6 @@ def main():
                         main_image_url = ""
                         if hasattr(main_article, 'content_code') and main_article.content_code:
                             # Buscar URL de imagen en el HTML del content_code
-                            import re
                             img_match = re.search(r'<img[^>]+src="([^"]+)"', main_article.content_code)
                             if img_match:
                                 main_image_url = img_match.group(1)
