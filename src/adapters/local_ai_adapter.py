@@ -44,22 +44,31 @@ class LocalHuggingFaceAdapter(AIServiceAdapter):
         try:
             from transformers import pipeline
             import torch
+            import os
+            
+            # Evitar problemas de multithreading en Mac
+            os.environ["TOKENIZERS_PARALLELISM"] = "false"
+            os.environ["OMP_NUM_THREADS"] = "1"
             
             print("🤖 Inicializando modelos locales de Hugging Face...")
             
             # Modelo para categorización de texto (multilingual)
-            # Usamos un modelo pequeño y rápido para clasificación zero-shot
+            # Usamos MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7 que es más ligero
+            # y funciona mejor en Mac (380MB vs 1.6GB de BART)
             self.categorizer = pipeline(
                 "zero-shot-classification",
-                model="facebook/bart-large-mnli",  # Modelo que entiende español
-                device=0 if torch.cuda.is_available() else -1  # GPU si está disponible
+                model="MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+                device=-1,  # Forzar CPU para compatibilidad Mac
+                framework="pt"  # PyTorch explícito
             )
             
-            # Modelo para extracción de entidades (NER)
+            # Modelo para extracción de entidades (NER) - versión simplificada para Mac
             self.ner_pipeline = pipeline(
                 "ner",
                 model="dslim/bert-base-NER",  # Modelo ligero para NER
-                device=0 if torch.cuda.is_available() else -1
+                device=-1,  # Forzar CPU
+                aggregation_strategy="simple",  # Evita problemas de memoria
+                framework="pt"
             )
             
             self._available = True
