@@ -1,0 +1,1344 @@
+# src/infrastructure/nlp_adapter.py
+from typing import List, Optional, Dict, Tuple
+from datetime import datetime, date
+from src.core.ports import NLPService
+from src.core.domain import Article, TopicData
+from src.services.ai_categorization import AICategorizationService
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+import nltk
+from nltk.corpus import stopwords
+import re
+import ssl
+import os
+
+# Descarga de recursos de NLTK (solo la primera vez)
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    print("Descargando recursos de NLTK...")
+    try:
+        # Intenta con SSL normal
+        nltk.download('stopwords')
+        nltk.download('punkt')
+    except:
+        # Si falla, desactiva verificación SSL (para desarrollo)
+        ssl._create_default_https_context = ssl._create_unverified_context
+        nltk.download('stopwords')
+        nltk.download('punkt')
+    
+SPANISH_STOPWORDS = set(stopwords.words('spanish'))
+
+class NLPAdapter(NLPService):
+    def __init__(self, use_ai: bool = True):
+        """
+        Inicializa el adaptador NLP
+        
+        Args:
+            use_ai: Si es True, usa IA local (Ollama). Si es False, usa lógica de reglas (fallback)
+        """
+        self.use_ai = use_ai
+        
+        if self.use_ai:
+            try:
+                self.ai_service = AICategorizationService()
+                print("✨ Categorización con IA local (Ollama) activada")
+            except Exception as e:
+                print(f"⚠️ No se pudo inicializar Ollama, usando reglas de fallback: {e}")
+                self.use_ai = False
+                self.ai_service = None
+        else:
+            self.ai_service = None
+            print("📋 Usando categorización basada en reglas (sin IA)")
+    
+    def preprocess(self, text: str) -> str:
+        """Limpieza básica de texto en español."""
+        if not text:
+            return ""
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text) # Eliminar puntuación
+        words = text.split()
+        words = [word for word in words if word not in SPANISH_STOPWORDS]
+        return " ".join(words)
+
+    def categorize_article(self, text: str) -> str:
+        """Categoriza un artículo basándose en palabras clave."""
+        text_lower = text.lower()
+        
+        # Política
+        if any(word in text_lower for word in ['congreso', 'presidente', 'ministr', 'legisl', 'gobierno', 'elecciones', 'partido', 'dina boluarte', 'castillo', 'fujimori']):
+            return "Política"
+        
+        # Economía
+        if any(word in text_lower for word in ['economía', 'dólar', 'inflación', 'banco central', 'bcr', 'precio', 'mercado', 'inversión', 'comercio', 'exportación', 'pbi', 'sunat']):
+            return "Economía"
+        
+        # Seguridad
+        if any(word in text_lower for word in ['crimen', 'delincuencia', 'robo', 'asalto', 'policía', 'seguridad', 'extorsión', 'secuestro', 'asesinato', 'homicidio']):
+            return "Seguridad"
+        
+        # Deportes
+        if any(word in text_lower for word in ['fútbol', 'deporte', 'selección', 'alianza', 'universitario', 'cristal', 'copa', 'mundial', 'liga', 'gol', 'partido', 'jugador']):
+            return "Deportes"
+        
+        # Salud
+        if any(word in text_lower for word in ['salud', 'hospital', 'médico', 'enfermedad', 'vacuna', 'minsa', 'essalud', 'pandemia', 'covid', 'tratamiento']):
+            return "Salud"
+        
+        # Educación
+        if any(word in text_lower for word in ['educación', 'universidad', 'colegio', 'estudiante', 'profesor', 'minedu', 'examen', 'admisión']):
+            return "Educación"
+        
+        # Internacional
+        if any(word in text_lower for word in ['internacional', 'mundo', 'eeuu', 'china', 'europa', 'rusia', 'brasil', 'argentina', 'venezuela', 'mexico']):
+            return "Internacional"
+        
+        # Cultura
+        if any(word in text_lower for word in ['cultura', 'miss', 'musica', 'concierto', 'talento', 'festival', 'banda']):
+            return "Culura"
+                
+        return "General"
+
+    def is_relevant(self, article: Article) -> bool:
+        """Determina si un artículo es relevante para procesar."""
+        # Filtrar artículos muy cortos o sin contenido significativo
+        if not article.title or len(article.title) < 20:
+            return False
+        
+        # Filtrar contenido irrelevante (publicidad, spam, etc.)
+        spam_keywords = ['sorteo', 'promoción', 'descuento', 'oferta', 'ganador', 'premio']
+        text_lower = (article.title + ' ' + (article.description or '')).lower()
+        
+        if any(word in text_lower for word in spam_keywords):
+            return False
+            
+        return True
+
+    def calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calcula similitud entre dos textos usando TF-IDF."""
+        vectorizer = TfidfVectorizer()
+        try:
+            tfidf_matrix = vectorizer.fit_transform([text1, text2])
+            similarity = (tfidf_matrix * tfidf_matrix.T).toarray()[0, 1]
+            return similarity
+        except:
+            return 0.0
+
+    def extract_keywords(self, text: str, n=8) -> set:
+        """Extrae palabras clave más importantes del texto."""
+        words = text.lower().split()
+        # Filtrar palabras muy comunes y stopwords
+        words = [w for w in words if len(w) > 3 and w not in SPANISH_STOPWORDS]
+        # Tomar las primeras N palabras únicas más significativas
+        return set(words[:n])
+
+    def detect_country(self, text: str) -> Optional[str]:
+        """
+        Detecta el país mencionado en el texto.
+        Retorna código de país o None si no se detecta.
+        """
+        text_lower = text.lower()
+        
+        # Mapa de países con variantes y contexto
+        country_patterns = {
+            'Perú': ['perú', 'peru', 'peruano', 'peruana', 'lima', 'arequipa', 'cusco', 'callao', 'trujillo'],
+            'Chile': ['chile', 'chileno', 'chilena', 'santiago', 'valparaíso', 'boric', 'piñera'],
+            'Argentina': ['argentina', 'argentino', 'argentina', 'buenos aires', 'milei', 'fernández'],
+            'México': ['méxico', 'mexico', 'mexicano', 'mexicana', 'cdmx', 'ciudad de méxico', 'amlo', 'lópez obrador'],
+            'Colombia': ['colombia', 'colombiano', 'colombiana', 'bogotá', 'petro', 'medellín'],
+            'Brasil': ['brasil', 'brazil', 'brasileño', 'brasileña', 'brasilia', 'são paulo', 'lula', 'bolsonaro'],
+            'Ecuador': ['ecuador', 'ecuatoriano', 'ecuatoriana', 'quito', 'guayaquil', 'noboa'],
+            'Bolivia': ['bolivia', 'boliviano', 'boliviana', 'la paz', 'arce', 'evo morales'],
+            'Venezuela': ['venezuela', 'venezolano', 'venezolana', 'caracas', 'maduro', 'guaidó'],
+            'Paraguay': ['paraguay', 'paraguayo', 'paraguaya', 'asunción'],
+            'Uruguay': ['uruguay', 'uruguayo', 'uruguaya', 'montevideo'],
+            'Estados Unidos': ['estados unidos', 'eeuu', 'usa', 'washington', 'biden', 'trump', 'nueva york', 'california', 'texas'],
+            'España': ['españa', 'español', 'española', 'madrid', 'barcelona', 'sánchez', 'cataluña'],
+            'China': ['china', 'chino', 'china', 'beijing', 'xi jinping', 'shanghái'],
+            'Rusia': ['rusia', 'ruso', 'rusa', 'moscú', 'putin', 'kremlin'],
+            'Ucrania': ['ucrania', 'ucraniano', 'ucraniana', 'kiev', 'zelenski', 'zelenskyy'],
+            'Israel': ['israel', 'israelí', 'jerusalén', 'tel aviv', 'netanyahu'],
+            'Palestina': ['palestina', 'palestino', 'gaza', 'cisjordania', 'hamas'],
+        }
+        
+        # Buscar menciones de países con contexto
+        country_mentions = {}
+        for country, patterns in country_patterns.items():
+            count = sum(1 for pattern in patterns if pattern in text_lower)
+            if count > 0:
+                country_mentions[country] = count
+        
+        # Retornar el país más mencionado
+        if country_mentions:
+            return max(country_mentions, key=country_mentions.get)
+        
+        return None
+
+    def extract_event_date(self, article: Article) -> Optional[date]:
+        """
+        Intenta extraer la fecha del evento de la noticia.
+        Por defecto usa published_at, pero puede detectar fechas específicas en el texto.
+        """
+        # Usar la fecha de publicación como fecha del evento
+        if hasattr(article, 'published_at') and article.published_at:
+            if isinstance(article.published_at, datetime):
+                return article.published_at.date()
+            elif isinstance(article.published_at, date):
+                return article.published_at
+        
+        # Si no hay fecha, usar hoy
+        return date.today()
+
+    def extract_hierarchical_category(self, article: Article, base_category: str) -> Tuple[str, str, str, str]:
+        """
+        Extrae categorización jerárquica de 5 niveles usando IA local (Ollama).
+        
+        Nivel 1 (category): Categoría principal (Política, Deportes, Espectáculos, etc.)
+        Nivel 2 (subcategory): Subcategoría específica (Presidente, Fútbol Nacional, Farándula, etc.)
+        Nivel 3 (theme): Tema principal (Donald Trump, Selección Peruana, Miss Universo, etc.)
+        Nivel 4 (subtema): Subtema específico (Gabinete, Eliminatorias, Concurso Final, etc.)
+        Nivel 5 (title): El título único del topic se genera después
+        
+        La IA entiende el contexto automáticamente sin necesidad de reglas rígidas.
+        
+        Retorna:
+        - category, subcategory, theme, subtema
+        """
+        # Usar IA (recomendado)
+        if self.use_ai and self.ai_service:
+            try:
+                category, subcategory, theme, subtema = self.ai_service.categorize_article(
+                    article.title,
+                    article.description or "",
+                    base_category
+                )
+                return (category, subcategory, theme, subtema)
+            except Exception as e:
+                print(f"⚠️ Error en categorización IA: {e}")
+                # Continuar con fallback básico
+        
+        # FALLBACK SIMPLE: Solo valores por defecto si falla la IA
+        # La IA es muchísimo mejor que reglas - solo retornamos valores básicos
+        print(f"⚠️ Usando fallback básico para: {article.title[:50]}...")
+        
+        return (base_category, "General", "General", "General")
+
+    def extract_tags(self, article: Article) -> List[str]:
+        """
+        Extrae tags/entidades importantes del artículo usando IA si está disponible.
+        Fallback: extracción basada en lista de entidades conocidas.
+        """
+        # Intentar con IA primero
+        if self.use_ai and self.ai_service:
+            try:
+                entities = self.ai_service.extract_entities(
+                    article.title,
+                    article.description or ""
+                )
+                if entities:
+                    # Normalizar tags
+                    tags = [entity.replace(' ', '_').lower() for entity in entities]
+                    return list(set(tags))[:15]
+            except Exception as e:
+                print(f"⚠️ Error extrayendo entidades con IA: {e}")
+        
+        # FALLBACK: Extracción basada en lista
+        text = f"{article.title} {article.description or ''}".lower()
+        tags = []
+        
+        # Lista de entidades importantes - solo las más comunes
+        entities = [
+            # Políticos principales
+            'dina boluarte', 'pedro castillo', 'keiko fujimori', 'rafael lópez aliaga',
+            'donald trump', 'joe biden', 'putin', 'xi jinping',
+            
+            # Deportes
+            'paolo guerrero', 'messi', 'cristiano ronaldo',
+            'alianza lima', 'universitario', 'sporting cristal',
+            
+            # Farándula
+            'magaly medina', 'gisela valcárcel',
+            
+            # Eventos
+            'mundial', 'copa américa', 'miss universo',
+            
+            # Instituciones
+            'congreso', 'minsa', 'sunat',
+        ]
+        
+        for entity in entities:
+            if entity in text:
+                tags.append(entity.replace(' ', '_'))
+        
+        return list(set(tags))[:15]
+
+    def quick_similarity(self, text1: str, text2: str) -> float:
+        """Calcula similitud rápida basada en palabras clave compartidas."""
+        keywords1 = self.extract_keywords(text1, 10)
+        keywords2 = self.extract_keywords(text2, 10)
+        
+        if not keywords1 or not keywords2:
+            return 0.0
+        
+        # Similitud de Jaccard: intersección / unión
+        intersection = len(keywords1 & keywords2)
+        union = len(keywords1 | keywords2)
+        
+        return intersection / union if union > 0 else 0.0
+
+    def cluster_and_categorize(self, articles: List[Article]) -> List[TopicData]:
+        """
+        Procesa artículos con agrupación inteligente basada en TAGS + discriminación por país/fecha:
+        1. Extrae tags, país y fecha de cada artículo
+        2. Agrupa por tags compartidos + mismo país + misma fecha (discriminación inteligente)
+        3. Valida que haya al menos 2 fuentes diferentes
+        4. Genera categorización jerárquica (category → subcategory → theme)
+        5. Crea topics solo si cumplen los criterios
+        """
+        if not articles:
+            return []
+        
+        print(f"📝 Procesando {len(articles)} artículos...")
+        
+        # Estructuras para almacenar topics por categoría + país + fecha
+        # {(category, country, date): [(title, summary, tags, article_ids, sources, subcategory, theme)]}
+        topics_by_key = {}
+        discarded = 0
+        
+        # Procesar cada artículo
+        for idx, article in enumerate(articles):
+            if (idx + 1) % 100 == 0:
+                print(f"  Procesados: {idx + 1}/{len(articles)}...")
+            
+            # 1. Verificar relevancia
+            if not self.is_relevant(article):
+                discarded += 1
+                continue
+            
+            # 2. Usar categoría ya asignada
+            category = article.category if hasattr(article, 'category') and article.category else "General"
+            
+            # 3. Extraer TAGS del artículo (entidades, nombres, temas específicos)
+            tags = self.extract_tags(article)
+            tags_set = set(tags)
+            
+            # Si no hay tags significativos, saltar
+            if len(tags_set) < 2:  # Mínimo 2 tags para asegurar relevancia
+                discarded += 1
+                continue
+            
+            # 4. Detectar país y fecha del evento
+            text = f"{article.title} {article.description or ''}"
+            country = self.detect_country(text)
+            event_date = self.extract_event_date(article)
+            
+            # 5. Extraer categorización jerárquica de 5 niveles
+            category_main, subcategory, theme, subtema = self.extract_hierarchical_category(article, category)
+            
+            # 6. Obtener fuente del artículo
+            source = article.source if hasattr(article, 'source') and article.source else "unknown"
+            
+            # 7. Clave única por categoría + discriminación inteligente
+            # SOLO discriminar por país en categorías donde importa el lugar del evento:
+            # - General (desastres naturales, eventos locales)
+            # - Seguridad (crimen específico de cada país)
+            # Para Política/Deportes/Economía internacional, NO discriminar por país
+            # (queremos agrupar todas las noticias de Trump, o Messi, sin importar desde dónde se reportan)
+            
+            discriminate_by_country = category_main in ["General", "Seguridad"]
+            
+            if discriminate_by_country and country:
+                key = (category_main, subcategory, country, event_date)
+            else:
+                # Para temas internacionales/globales, agrupar solo por categoría+subcategoría
+                key = (category_main, subcategory, None, None)
+            
+            # 8. Inicializar clave si no existe
+            if key not in topics_by_key:
+                topics_by_key[key] = []
+            
+            # 9. Buscar topic similar basado en TAGS COMPARTIDOS dentro de esta clave
+            best_match_idx = -1
+            best_similarity = 0
+            best_shared_tags = 0
+            
+            for i, (topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema) in enumerate(topics_by_key[key]):
+                # Similitud basada en TAGS compartidos
+                shared_tags = tags_set & topic_tags
+                num_shared = len(shared_tags)
+                
+                if num_shared == 0:
+                    continue
+                
+                # Calcular similitud: tags compartidos / total de tags únicos
+                total_tags = len(tags_set | topic_tags)
+                similarity = num_shared / total_tags if total_tags > 0 else 0
+                
+                # Criterios de agrupación más flexibles:
+                # - Con 3+ tags compartidos: agrupar si similitud > 15%
+                # - Con 2 tags compartidos: agrupar si similitud > 25%
+                # Esto permite agrupar mejor noticias relacionadas sin ser demasiado permisivo
+                meets_criteria = (
+                    (num_shared >= 3 and similarity >= 0.15) or
+                    (num_shared >= 2 and similarity >= 0.25)
+                )
+                
+                if meets_criteria and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match_idx = i
+                    best_shared_tags = num_shared
+            
+            # Si hay un match válido, agrupar
+            if best_match_idx >= 0:
+                # Agregar al topic más similar
+                topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema = topics_by_key[key][best_match_idx]
+                updated_tags = topic_tags | tags_set  # Unir tags
+                updated_sources = sources | {source}  # Agregar fuente
+                topics_by_key[key][best_match_idx] = (
+                    topic_title,
+                    topic_summary,
+                    updated_tags,
+                    article_ids + [article.id],
+                    updated_sources,
+                    topic_subcategory,  # Mantener subcategoría
+                    topic_theme,  # Mantener tema
+                    topic_subtema  # Mantener subtema
+                )
+            else:
+                # 10. Si no hay similar, crear nuevo topic candidato
+                topic_title = article.title
+                topic_summary = article.description[:200] if article.description else article.title
+                
+                topics_by_key[key].append((
+                    topic_title,
+                    topic_summary,
+                    tags_set,
+                    [article.id],
+                    {source},  # Set de fuentes
+                    subcategory,
+                    theme,
+                    subtema  # Nivel 4
+                ))
+        
+        print(f"  ⊗ Artículos descartados (sin tags relevantes/spam): {discarded}")
+        print(f"  📦 Total de agrupaciones candidatas: {sum(len(topics) for topics in topics_by_key.values())}")
+        
+        # 11. Convertir a TopicData - Validación flexible balanceada
+        processed_topics: List[TopicData] = []
+        topic_id_counter = 0
+        rejected_low_quality = 0
+        
+        for (category, subcategory_key, country, event_date), topics_list in topics_by_key.items():
+            for topic_title, topic_summary, tags, article_ids, sources, subcategory, theme, subtema in topics_list:
+                num_articles = len(article_ids)
+                num_sources = len(sources)
+                
+                # Validación balanceada:
+                # - Si tiene 2+ fuentes: acepta incluso con 2 artículos
+                # - Si tiene 1 sola fuente: requiere 3+ artículos (evita topics débiles)
+                # - Rechaza topics de 1 artículo de 1 fuente (no es topic, es noticia única)
+                is_valid_topic = (
+                    (num_sources >= 2 and num_articles >= 2) or
+                    (num_sources >= 1 and num_articles >= 3)
+                )
+                
+                if not is_valid_topic:
+                    rejected_low_quality += num_articles
+                    continue
+                
+                # Determinar prioridad basada en cantidad de artículos Y fuentes
+                num_articles = len(article_ids)
+                num_sources = len(sources)
+                
+                # Dar más prioridad a topics con muchas fuentes
+                if num_articles >= 20 or num_sources >= 5:
+                    priority = 1  # Gigante - noticia muy importante
+                elif num_articles >= 10 or num_sources >= 4:
+                    priority = 2  # Importante
+                elif num_articles >= 5 or num_sources >= 3:
+                    priority = 3  # Medio
+                else:
+                    priority = 4  # Secundario
+                
+                # Formatear tags como "#tag,#tag,#tag,#country,#date"
+                formatted_tags = ','.join([f"#{tag.replace('_', '')}" for tag in sorted(tags)[:10]])
+                if country and country != "General":
+                    formatted_tags += f",#{country.replace(' ', '')}"
+                if event_date:
+                    formatted_tags += f",#{event_date.strftime('%Y-%m-%d')}"
+                
+                # Calcular relevancia de cada artículo en el topic
+                article_relevance_scores = self._calculate_article_relevance(article_ids, tags, articles)
+                
+                # Generar resumen mejorado usando los artículos más relevantes
+                enhanced_summary = self._generate_enhanced_summary(
+                    article_ids, 
+                    article_relevance_scores, 
+                    articles,
+                    topic_title
+                )
+                
+                processed_topics.append(TopicData(
+                    topic_id=str(topic_id_counter),
+                    title=topic_title,
+                    summary=enhanced_summary,
+                    main_image_url=f"https://cdn.minerva.ai/topic_{topic_id_counter}.jpg",
+                    priority=priority,
+                    category=category,
+                    subcategory=subcategory,
+                    topic_theme=theme,
+                    topic_subtema=subtema,  # Nivel 4
+                    country=country if country != "General" else None,
+                    tags=formatted_tags,
+                    event_date=event_date,
+                    article_ids=article_ids,
+                    article_relevance_scores=article_relevance_scores
+                ))
+                topic_id_counter += 1
+        
+        print(f"\n📊 Resultado: {len(processed_topics)} topics creados (validación balanceada)")
+        print(f"📊 Artículos rechazados (baja calidad): {rejected_low_quality}")
+        print(f"📊 Claves únicas (categoría+país+fecha): {len(topics_by_key)}")
+        print(f"📊 Topics por categoría: {len(topics_by_key)} agrupaciones")
+        return processed_topics
+
+    def _calculate_article_relevance(self, article_ids: List[str], topic_tags: set, all_articles: List[Article]) -> dict:
+        """
+        Calcula el porcentaje de relevancia de cada artículo en el topic.
+        
+        Factores de relevancia:
+        - Tags compartidos con el topic (60%)
+        - Posición temporal (20%) - artículos más recientes son más relevantes
+        - Tamaño del contenido (20%) - artículos más completos son más relevantes
+        
+        Returns:
+            dict: {article_id: relevance_percentage}
+        """
+        # Crear lookup de artículos por ID
+        articles_dict = {art.id: art for art in all_articles if art.id in article_ids}
+        
+        if not articles_dict:
+            return {}
+        
+        relevance_scores = {}
+        
+        # Obtener fechas para calcular recencia
+        article_dates = []
+        for art_id in article_ids:
+            if any(word in text for word in ['presidente', 'presidencia', 'ejecutivo']):
+                subcategory = "Presidente"
+            elif any(word in text for word in ['congreso', 'legislativo', 'ley', 'proyecto de ley']):
+                subcategory = "Congreso"
+            elif any(word in text for word in ['elecciones', 'electoral', 'votación']):
+                subcategory = "Elecciones"
+            elif any(word in text for word in ['corrupc', 'fiscal', 'investigación']):
+                subcategory = "Corrupción"
+            elif any(word in text for word in ['internacional', 'exterior', 'diplomacia']):
+                subcategory = "Internacional"
+            
+            # Detectar temas específicos - Políticos internacionales
+            if 'trump' in text or 'donald trump' in text:
+                theme = "Donald Trump"
+            elif 'biden' in text or 'joe biden' in text:
+                theme = "Joe Biden"
+            elif 'kamala harris' in text or 'harris' in text:
+                theme = "Kamala Harris"
+            elif 'putin' in text or 'vladimir putin' in text:
+                theme = "Vladimir Putin"
+            elif 'xi jinping' in text or 'xi' in text:
+                theme = "Xi Jinping"
+            elif 'zelenski' in text or 'zelenskyy' in text:
+                theme = "Volodímir Zelenski"
+            elif 'netanyahu' in text or 'benjamin netanyahu' in text:
+                theme = "Benjamin Netanyahu"
+            
+            # Políticos latinoamericanos
+            elif 'milei' in text or 'javier milei' in text:
+                theme = "Javier Milei"
+            elif 'lula' in text or 'lula da silva' in text:
+                theme = "Lula da Silva"
+            elif 'petro' in text or 'gustavo petro' in text:
+                theme = "Gustavo Petro"
+            elif 'maduro' in text or 'nicolás maduro' in text:
+                theme = "Nicolás Maduro"
+            elif 'boric' in text or 'gabriel boric' in text:
+                theme = "Gabriel Boric"
+            
+            # Políticos peruanos
+            elif 'dina boluarte' in text or 'boluarte' in text:
+                theme = "Dina Boluarte"
+                # Subtemas de Dina Boluarte
+                if 'gabinete' in text or 'ministro' in text:
+                    subtema = "Gabinete Ministerial"
+                elif 'viaje' in text or 'rolex' in text:
+                    subtema = "Controversias"
+                elif 'protesta' in text or 'paro' in text:
+                    subtema = "Protestas Sociales"
+            elif 'pedro castillo' in text or 'castillo' in text:
+                theme = "Pedro Castillo"
+                if 'juicio' in text or 'prisión' in text or 'penal' in text:
+                    subtema = "Proceso Judicial"
+                elif 'vacancia' in text or 'golpe' in text:
+                    subtema = "Golpe de Estado"
+            elif 'keiko fujimori' in text or 'fujimori' in text:
+                theme = "Keiko Fujimori"
+                if 'fuerza popular' in text:
+                    subtema = "Fuerza Popular"
+                elif 'juicio' in text or 'prisión' in text:
+                    subtema = "Casos Judiciales"
+            elif 'rafael lópez aliaga' in text or 'lópez aliaga' in text:
+                theme = "Rafael López Aliaga"
+                if 'lima' in text or 'alcalde' in text:
+                    subtema = "Gestión Municipal"
+            elif 'verónika mendoza' in text or 'mendoza' in text:
+                theme = "Verónika Mendoza"
+            elif 'antauro humala' in text or 'antauro' in text:
+                theme = "Antauro Humala"
+            elif 'betsy chávez' in text or 'betsy chavez' in text:
+                theme = "Betsy Chávez"
+                if 'ministro' in text or 'cultura' in text:
+                    subtema = "Gestión Ministerial"
+            
+            # Más políticos peruanos
+            elif 'alberto otárola' in text or 'otárola' in text:
+                theme = "Alberto Otárola"
+            elif 'gustavo adrianzén' in text or 'adrianzén' in text:
+                theme = "Gustavo Adrianzén"
+            elif 'patricia benavides' in text or 'benavides' in text:
+                theme = "Patricia Benavides"
+                if 'fiscal' in text:
+                    subtema = "Fiscalía"
+            
+            # Instituciones y eventos políticos
+            elif 'vacancia' in text:
+                theme = "Vacancia Presidencial"
+            elif 'referéndum' in text or 'referendum' in text:
+                theme = "Referéndum"
+            elif 'censura' in text:
+                theme = "Censura Ministerial"
+            elif 'estado de emergencia' in text or 'toque de queda' in text:
+                theme = "Estado de Emergencia"
+            elif 'votación' in text:
+                theme = "Votacion"
+        
+        # DEPORTES
+        elif category == "Deportes":
+            if any(word in text for word in ['selección', 'mundial', 'eliminatorias', 'bicolor', 'blanquirroja']):
+                subcategory = "Selección Nacional"
+            elif any(word in text for word in ['alianza', 'universitario', 'cristal', 'melgar', 'liga 1', 'cienciano']):
+                subcategory = "Fútbol Nacional"
+            elif any(word in text for word in ['premier', 'la liga', 'champions', 'bundesliga', 'messi', 'ronaldo']):
+                subcategory = "Fútbol Internacional"
+            elif any(word in text for word in ['tenis', 'atp', 'wta']):
+                subcategory = "Tenis"
+            elif any(word in text for word in ['nba', 'baloncesto', 'basketball']):
+                subcategory = "Baloncesto"
+            elif any(word in text for word in ['fórmula 1', 'f1', 'verstappen', 'hamilton']):
+                subcategory = "Fórmula 1"
+            elif any(word in text for word in ['boxeo', 'pelea', 'combate']):
+                subcategory = "Boxeo"
+            elif any(word in text for word in ['vóley', 'voleibol']):
+                subcategory = "Vóley"
+            
+            # Temas específicos - Fútbol internacional
+            if 'messi' in text or 'lionel messi' in text:
+                theme = "Lionel Messi"
+            elif 'cristiano' in text or 'ronaldo' in text:
+                theme = "Cristiano Ronaldo"
+            elif 'neymar' in text:
+                theme = "Neymar"
+            elif 'mbappé' in text or 'mbappe' in text:
+                theme = "Kylian Mbappé"
+            elif 'haaland' in text:
+                theme = "Erling Haaland"
+            
+            # Jugadores peruanos
+            elif 'paolo guerrero' in text or 'guerrero' in text:
+                theme = "Paolo Guerrero"
+            elif 'lapadula' in text or 'gianluca lapadula' in text:
+                theme = "Gianluca Lapadula"
+            elif 'carrillo' in text or 'andré carrillo' in text:
+                theme = "André Carrillo"
+            elif 'cueva' in text or 'christian cueva' in text:
+                theme = "Christian Cueva"
+            elif 'yotún' in text or 'yoshimar yotún' in text:
+                theme = "Yoshimar Yotún"
+            
+            # Clubes peruanos
+            elif 'alianza lima' in text:
+                theme = "Alianza Lima"
+            elif 'universitario' in text:
+                theme = "Universitario"
+            elif 'sporting cristal' in text or 'cristal' in text:
+                theme = "Sporting Cristal"
+            
+            # Eventos deportivos
+            elif 'mundial 2026' in text or 'mundial' in text:
+                theme = "Mundial 2026"
+            elif 'copa américa' in text:
+                theme = "Copa América"
+            elif 'eliminatorias' in text:
+                theme = "Eliminatorias"
+            elif 'copa libertadores' in text or 'libertadores' in text:
+                theme = "Copa Libertadores"
+            elif 'champions league' in text or 'champions' in text:
+                theme = "Champions League"
+        
+        # ECONOMÍA
+        elif category == "Economía":
+            if any(word in text for word in ['dólar', 'tipo de cambio', 'soles']):
+                subcategory = "Tipo de Cambio"
+                theme = "Dólar"
+            elif any(word in text for word in ['banco central', 'bcr', 'tasa de interés']):
+                subcategory = "Banca Central"
+                theme = "Política Monetaria"
+            elif any(word in text for word in ['inflación', 'precio', 'canasta básica']):
+                subcategory = "Inflación"
+                theme = "Precios"
+            elif any(word in text for word in ['empleo', 'trabajo', 'desempleo']):
+                subcategory = "Empleo"
+                theme = "Mercado Laboral"
+            elif any(word in text for word in ['bitcoin', 'criptomoneda', 'crypto']):
+                subcategory = "Criptomonedas"
+                theme = "Bitcoin"
+            elif any(word in text for word in ['bolsa', 'bvl', 'acciones']):
+                subcategory = "Bolsa de Valores"
+                theme = "Mercado Bursátil"
+            
+            # Empresas específicas
+            if 'petro-perú' in text or 'petroperú' in text:
+                theme = "Petro-Perú"
+            elif 'latam' in text:
+                theme = "LATAM Airlines"
+        
+        # SEGURIDAD
+        elif category == "Seguridad":
+            if any(word in text for word in ['extorsión', 'sicariato']):
+                subcategory = "Crimen Organizado"
+                theme = "Extorsión y Sicariato"
+            elif any(word in text for word in ['robo', 'asalto', 'delincuencia']):
+                subcategory = "Delincuencia Común"
+                theme = "Robos y Asaltos"
+            elif any(word in text for word in ['feminicidio', 'violencia de género']):
+                subcategory = "Violencia de Género"
+                theme = "Feminicidio"
+            elif any(word in text for word in ['narcotráfico', 'droga', 'cocaína']):
+                subcategory = "Narcotráfico"
+                theme = "Tráfico de Drogas"
+        
+        # SALUD
+        elif category == "Salud":
+            if any(word in text for word in ['covid', 'coronavirus', 'pandemia']):
+                subcategory = "COVID-19"
+                theme = "Pandemia"
+            elif any(word in text for word in ['vacuna', 'vacunación']):
+                subcategory = "Vacunación"
+                theme = "Campañas de Vacunación"
+            elif any(word in text for word in ['dengue', 'malaria', 'zika']):
+                subcategory = "Enfermedades Tropicales"
+                theme = "Dengue"
+        
+        # TECNOLOGÍA
+        elif category == "Tecnología":
+            if any(word in text for word in ['inteligencia artificial', 'ia', 'chatgpt', 'openai']):
+                subcategory = "Inteligencia Artificial"
+                theme = "ChatGPT y IA"
+            elif any(word in text for word in ['whatsapp', 'instagram', 'facebook', 'tiktok']):
+                subcategory = "Redes Sociales"
+                if 'whatsapp' in text:
+                    theme = "WhatsApp"
+                elif 'instagram' in text:
+                    theme = "Instagram"
+                elif 'tiktok' in text:
+                    theme = "TikTok"
+            elif any(word in text for word in ['iphone', 'apple', 'ios']):
+                subcategory = "Apple"
+                theme = "iPhone"
+            elif any(word in text for word in ['android', 'google', 'pixel']):
+                subcategory = "Google"
+                theme = "Android"
+        
+        # ESPECTÁCULOS (Nueva categoría separada para farándula, concursos, etc)
+        elif category == "Espectáculos":
+            # Farándula Peruana
+            if any(word in text for word in ['magaly', 'gisela', 'ethel pozo', 'janet barboza']):
+                subcategory = "Farándula"
+                if 'magaly medina' in text or 'magaly' in text:
+                    theme = "Magaly Medina"
+                elif 'gisela valcárcel' in text or 'gisela' in text:
+                    theme = "Gisela Valcárcel"
+            elif any(word in text for word in ['pamela franco', 'christian domínguez', 'pamela lópez', 'karla tarazona']):
+                subcategory = "Farándula"
+                theme = "Polémicas de Farándula"
+            
+            # Concursos de Belleza
+            elif any(word in text for word in ['miss universo', 'miss perú', 'miss mundo', 'concurso de belleza', 'sheynnis']):
+                subcategory = "Concursos de Belleza"
+                theme = "Miss Universo"
+                if 'miss perú' in text or 'karla bacigalupo' in text:
+                    subtema = "Miss Perú"
+                elif 'final' in text or 'ganadora' in text or 'corona' in text:
+                    subtema = "Final del Concurso"
+            
+            # Música y Conciertos
+            elif any(word in text for word in ['concierto', 'canción', 'cantante', 'músico']):
+                subcategory = "Música"
+                if 'taylor swift' in text:
+                    theme = "Taylor Swift"
+                elif 'shakira' in text:
+                    theme = "Shakira"
+                elif 'bad bunny' in text:
+                    theme = "Bad Bunny"
+        
+        # CULTURA (Solo arte y eventos culturales serios)
+        elif category == "Cultura":
+            if any(word in text for word in ['cine', 'película', 'film', 'marvel', 'disney']):
+                subcategory = "Cine"
+            elif any(word in text for word in ['televisión', 'serie', 'netflix']):
+                subcategory = "TV y Streaming"
+                if 'netflix' in text:
+                    theme = "Netflix"
+            elif any(word in text for word in ['museo', 'exposición', 'arte', 'pintura']):
+                subcategory = "Arte"
+        
+        # GENERAL (eventos naturales, otros)
+        elif category == "General":
+            if any(word in text for word in ['sismo', 'terremoto', 'temblor']):
+                subcategory = "Desastres Naturales"
+                theme = "Sismo"
+            elif any(word in text for word in ['inundación', 'huaico', 'deslizamiento']):
+                subcategory = "Desastres Naturales"
+                theme = "Inundaciones"
+            elif any(word in text for word in ['incendio', 'fuego']):
+                subcategory = "Desastres"
+                theme = "Incendios"
+            elif any(word in text for word in ['fenómeno del niño', 'niño costero']):
+                subcategory = "Clima"
+                theme = "Fenómeno del Niño"
+        
+        return (category, subcategory, theme, subtema)
+
+    def extract_tags(self, article: Article) -> List[str]:
+        """
+        Extrae tags/entidades importantes del artículo para mejor agrupación.
+        Identifica nombres propios, lugares, organizaciones, eventos específicos.
+        """
+        text = f"{article.title} {article.description or ''}".lower()
+        tags = []
+        
+        # Entidades importantes - nombres propios comunes en noticias peruanas
+        # Lista expandida masivamente para mejor categorización
+        entities = [
+            # Políticos Peruanos - Gobierno y Ejecutivo
+            'dina boluarte', 'pedro castillo', 'martín vizcarra', 'ollanta humala',
+            'alberto fujimori', 'alejandro toledo', 'ppk', 'pedro pablo kuczynski',
+            'alan garcía', 'valentín paniagua', 'alejandro toledo',
+            
+            # Políticos Peruanos - Congreso y Partidos
+            'keiko fujimori', 'rafael lópez aliaga', 'verónika mendoza', 'antauro humala',
+            'vladimir cerrón', 'gino ríos', 'jorge montoya', 'patricia chirinos',
+            'susel paredes', 'maría del carmen alva', 'alejandro soto', 'lady camones',
+            'hernando guerra garcía', 'alex paredes', 'waldemar cerrón',
+            
+            # Políticos Peruanos - Ministerios y Gabinete
+            'betsy chávez', 'ana cecilia gervasi', 'gustavo adrianzén', 'josé arista',
+            'alberto otárola', 'aníbal torres', 'guido bellido', 'héctor béjar',
+            'césar landa', 'luis alberto otárola', 'jorge chávez cresta',
+            
+            # Políticos Peruanos - Poder Judicial y Fiscalía
+            'patricia benavides', 'juan carlos checkley', 'zoraida ávalos', 'pablo sánchez',
+            'domingo pérez', 'josé domingo pérez', 'rafael vela', 'hamilton castro',
+            
+            # Políticos Internacionales - USA
+            'donald trump', 'joe biden', 'kamala harris', 'barack obama',
+            'mike pence', 'ron desantis', 'elon musk',
+            
+            # Políticos Internacionales - Europa y Asia
+            'xi jinping', 'vladimir putin', 'volodímir zelenski', 'emmanuel macron',
+            'boris johnson', 'rishi sunak', 'olaf scholz', 'giorgia meloni',
+            'benjamin netanyahu', 'isaac herzog',
+            
+            # Políticos Latinoamericanos
+            'javier milei', 'lula da silva', 'gustavo petro', 'nicolás maduro',
+            'gabriel boric', 'andrés manuel lópez obrador', 'amlo', 'nayib bukele',
+            'guillermo lasso', 'luis arce', 'santiago peña',
+            
+            # Deportes - Fútbol Peruano
+            'paolo guerrero', 'gianluca lapadula', 'andré carrillo', 'yoshimar yotún',
+            'edison flores', 'christian cueva', 'luis advíncula', 'renato tapia',
+            'sergio peña', 'alexander callens', 'anderson santamaría', 'marcos lópez',
+            'wilder cartagena', 'piero quispe', 'jorge fossati', 'juan reynoso',
+            'ricardo gareca', 'josé guillermo del solar',
+            
+            # Deportes - Clubes Peruanos
+            'alianza lima', 'universitario', 'sporting cristal', 'melgar', 'cienciano',
+            'sport boys', 'deportivo municipal', 'cusco fc', 'mannucci',
+            
+            # Deportes - Internacional
+            'lionel messi', 'cristiano ronaldo', 'neymar', 'kylian mbappé',
+            'erling haaland', 'vinícius júnior', 'jude bellingham',
+            
+            # Espectáculos y Farándula Peruana
+            'magaly medina', 'gisela valcárcel', 'ethel pozo', 'brunella horna',
+            'janet barboza', 'pamela franco', 'christian domínguez', 'pamela lópez',
+            'karla tarazona', 'jefferson farfán', 'yahaira plasencia', 'melissa klug',
+            'leslie shaw', 'jossmery toledo', 'sheyla rojas', 'nicola porcella',
+            'angie arizaga', 'jota benz', 'andrea san martín',
+            
+            # Espectáculos - Internacionales
+            'taylor swift', 'shakira', 'karol g', 'bad bunny', 'peso pluma',
+            'rosalía', 'madonna', 'beyoncé', 'rihanna',
+            
+            # Miss Universo y Concursos
+            'miss universo', 'miss perú', 'karla bacigalupo', 'sheynnis palacios',
+            'alessia rovegno',
+            
+            # Lugares específicos - Perú
+            'lima', 'callao', 'arequipa', 'cusco', 'trujillo', 'piura', 'iquitos',
+            'machu picchu', 'línea 2', 'panamericana', 'evitamiento', 'aeropuerto jorge chávez',
+            'gamarra', 'mesa redonda', 'cercado de lima', 'miraflores', 'san isidro',
+            
+            # Eventos Políticos y Sociales
+            'mundial 2026', 'copa américa', 'elecciones 2026', 'referéndum',
+            'estado de emergencia', 'toque de queda', 'paro nacional', 'protesta',
+            'marcha', 'plantón', 'huelga',
+            
+            # Eventos Deportivos
+            'copa libertadores', 'champions league', 'euro 2024', 'juegos olímpicos',
+            'eliminatorias', 'mundial qatar', 'liga 1', 'torneo clausura',
+            
+            # Instituciones Públicas Peruanas
+            'congreso', 'poder judicial', 'tribunal constitucional', 'fiscalía',
+            'minsa', 'minedu', 'mtc', 'midis', 'mindef', 'mininter',
+            'sunat', 'bcr', 'banco central', 'indecopi', 'essalud', 'sunafil',
+            'onpe', 'jne', 'reniec', 'sutran', 'osinergmin', 'sunass',
+            'defensoría del pueblo', 'pcm', 'contraloría',
+            
+            # Empresas Peruanas
+            'petro-perú', 'electroperú', 'sedapal', 'enel', 'luz del sur',
+            'edelnor', 'telefónica', 'claro', 'entel', 'bitel',
+            'interbank', 'bcp', 'bbva', 'scotiabank', 'banco de la nación',
+            'saga falabella', 'ripley', 'wong', 'metro', 'plaza vea',
+            
+            # Empresas Internacionales
+            'latam', 'netflix', 'disney+', 'hbo', 'prime video', 'spotify',
+            'uber', 'rappi', 'pedidos ya',
+            
+            # Tecnología
+            'covid-19', 'coronavirus', 'vacuna', 'ómicron', 'dengue',
+            'bitcoin', 'criptomoneda', 'ethereum', 'binance',
+            'inteligencia artificial', 'chatgpt', 'openai', 'gemini', 'claude',
+            'tiktok', 'instagram', 'facebook', 'twitter', 'x', 'whatsapp',
+            'meta', 'google', 'apple', 'microsoft', 'amazon',
+            
+            # Eventos Naturales
+            'sismo', 'terremoto', 'temblor', 'tsunami', 'huracán', 'inundación',
+            'deslizamiento', 'huaico', 'fenómeno del niño', 'niño costero',
+            'sequía', 'helada', 'friaje',
+            
+            # Ligas Deportivas
+            'liga 1', 'premier league', 'la liga', 'bundesliga', 'serie a',
+            'ligue 1', 'mls', 'liga mx',
+            'selección peruana', 'blanquirroja', 'bicolor',
+            
+            # Seguridad y Crimen
+            'los malditos de angamos', 'tren de aragua', 'caracol', 'eln',
+            'vraem', 'sendero luminoso', 'terrorismo',
+        ]
+        
+        # Buscar entidades en el texto
+        for entity in entities:
+            if entity in text:
+                # Normalizar el tag
+                tag = entity.replace(' ', '_')
+                tags.append(tag)
+        
+        # Extraer palabras clave importantes (sustantivos, nombres)
+        words = text.split()
+        important_words = []
+        
+        for i, word in enumerate(words):
+            # Detectar palabras capitalizadas (posibles nombres propios)
+            if len(word) > 4 and word not in SPANISH_STOPWORDS:
+                # Si la palabra aparece al inicio de una frase o es nombre propio
+                if i == 0 or (i > 0 and words[i-1] in ['.', ':', '-']):
+                    important_words.append(word)
+                # Palabras significativas largas
+                elif len(word) > 6:
+                    important_words.append(word)
+        
+        # Agregar las top 5 palabras importantes como tags
+        tags.extend(important_words[:5])
+        
+        # Eliminar duplicados y retornar
+        return list(set(tags))[:15]  # Máximo 15 tags por artículo
+
+    def quick_similarity(self, text1: str, text2: str) -> float:
+        """Calcula similitud rápida basada en palabras clave compartidas."""
+        keywords1 = self.extract_keywords(text1, 10)
+        keywords2 = self.extract_keywords(text2, 10)
+        
+        if not keywords1 or not keywords2:
+            return 0.0
+        
+        # Similitud de Jaccard: intersección / unión
+        intersection = len(keywords1 & keywords2)
+        union = len(keywords1 | keywords2)
+        
+        return intersection / union if union > 0 else 0.0
+
+    def cluster_and_categorize(self, articles: List[Article]) -> List[TopicData]:
+        """
+        Procesa artículos con agrupación inteligente basada en TAGS + discriminación por país/fecha:
+        1. Extrae tags, país y fecha de cada artículo
+        2. Agrupa por tags compartidos + mismo país + misma fecha (discriminación inteligente)
+        3. Valida que haya al menos 2 fuentes diferentes
+        4. Genera categorización jerárquica (category → subcategory → theme)
+        5. Crea topics solo si cumplen los criterios
+        """
+        if not articles:
+            return []
+        
+        print(f"📝 Procesando {len(articles)} artículos...")
+        
+        # Estructuras para almacenar topics por categoría + país + fecha
+        # {(category, country, date): [(title, summary, tags, article_ids, sources, subcategory, theme)]}
+        topics_by_key = {}
+        discarded = 0
+        
+        # Procesar cada artículo
+        for idx, article in enumerate(articles):
+            if (idx + 1) % 100 == 0:
+                print(f"  Procesados: {idx + 1}/{len(articles)}...")
+            
+            # 1. Verificar relevancia
+            if not self.is_relevant(article):
+                discarded += 1
+                continue
+            
+            # 2. Usar categoría ya asignada
+            category = article.category if hasattr(article, 'category') and article.category else "General"
+            
+            # 3. Extraer TAGS del artículo (entidades, nombres, temas específicos)
+            tags = self.extract_tags(article)
+            tags_set = set(tags)
+            
+            # Si no hay tags significativos, saltar
+            if len(tags_set) < 2:  # Mínimo 2 tags para asegurar relevancia
+                discarded += 1
+                continue
+            
+            # 4. Detectar país y fecha del evento
+            text = f"{article.title} {article.description or ''}"
+            country = self.detect_country(text)
+            event_date = self.extract_event_date(article)
+            
+            # 5. Extraer categorización jerárquica de 5 niveles
+            category_main, subcategory, theme, subtema = self.extract_hierarchical_category(article, category)
+            
+            # 6. Obtener fuente del artículo
+            source = article.source if hasattr(article, 'source') and article.source else "unknown"
+            
+            # 7. Clave única por categoría + discriminación inteligente
+            # SOLO discriminar por país en categorías donde importa el lugar del evento:
+            # - General (desastres naturales, eventos locales)
+            # - Seguridad (crimen específico de cada país)
+            # Para Política/Deportes/Economía internacional, NO discriminar por país
+            # (queremos agrupar todas las noticias de Trump, o Messi, sin importar desde dónde se reportan)
+            
+            discriminate_by_country = category_main in ["General", "Seguridad"]
+            
+            if discriminate_by_country and country:
+                key = (category_main, subcategory, country, event_date)
+            else:
+                # Para temas internacionales/globales, agrupar solo por categoría+subcategoría
+                key = (category_main, subcategory, None, None)
+            
+            # 8. Inicializar clave si no existe
+            if key not in topics_by_key:
+                topics_by_key[key] = []
+            
+            # 9. Buscar topic similar basado en TAGS COMPARTIDOS dentro de esta clave
+            best_match_idx = -1
+            best_similarity = 0
+            best_shared_tags = 0
+            
+            for i, (topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema) in enumerate(topics_by_key[key]):
+                # Similitud basada en TAGS compartidos
+                shared_tags = tags_set & topic_tags
+                num_shared = len(shared_tags)
+                
+                if num_shared == 0:
+                    continue
+                
+                # Calcular similitud: tags compartidos / total de tags únicos
+                total_tags = len(tags_set | topic_tags)
+                similarity = num_shared / total_tags if total_tags > 0 else 0
+                
+                # Criterios de agrupación más flexibles:
+                # - Con 3+ tags compartidos: agrupar si similitud > 15%
+                # - Con 2 tags compartidos: agrupar si similitud > 25%
+                # Esto permite agrupar mejor noticias relacionadas sin ser demasiado permisivo
+                meets_criteria = (
+                    (num_shared >= 3 and similarity >= 0.15) or
+                    (num_shared >= 2 and similarity >= 0.25)
+                )
+                
+                if meets_criteria and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match_idx = i
+                    best_shared_tags = num_shared
+            
+            # Si hay un match válido, agrupar
+            if best_match_idx >= 0:
+                # Agregar al topic más similar
+                topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema = topics_by_key[key][best_match_idx]
+                updated_tags = topic_tags | tags_set  # Unir tags
+                updated_sources = sources | {source}  # Agregar fuente
+                topics_by_key[key][best_match_idx] = (
+                    topic_title,
+                    topic_summary,
+                    updated_tags,
+                    article_ids + [article.id],
+                    updated_sources,
+                    topic_subcategory,  # Mantener subcategoría
+                    topic_theme,  # Mantener tema
+                    topic_subtema  # Mantener subtema
+                )
+            else:
+                # 10. Si no hay similar, crear nuevo topic candidato
+                topic_title = article.title
+                topic_summary = article.description[:200] if article.description else article.title
+                
+                topics_by_key[key].append((
+                    topic_title,
+                    topic_summary,
+                    tags_set,
+                    [article.id],
+                    {source},  # Set de fuentes
+                    subcategory,
+                    theme,
+                    subtema  # Nivel 4
+                ))
+        
+        print(f"  ⊗ Artículos descartados (sin tags relevantes/spam): {discarded}")
+        print(f"  📦 Total de agrupaciones candidatas: {sum(len(topics) for topics in topics_by_key.values())}")
+        
+        # 11. Convertir a TopicData - Validación flexible balanceada
+        processed_topics: List[TopicData] = []
+        topic_id_counter = 0
+        rejected_low_quality = 0
+        
+        for (category, subcategory_key, country, event_date), topics_list in topics_by_key.items():
+            for topic_title, topic_summary, tags, article_ids, sources, subcategory, theme, subtema in topics_list:
+                num_articles = len(article_ids)
+                num_sources = len(sources)
+                
+                # Validación balanceada:
+                # - Si tiene 2+ fuentes: acepta incluso con 2 artículos
+                # - Si tiene 1 sola fuente: requiere 3+ artículos (evita topics débiles)
+                # - Rechaza topics de 1 artículo de 1 fuente (no es topic, es noticia única)
+                is_valid_topic = (
+                    (num_sources >= 2 and num_articles >= 2) or
+                    (num_sources >= 1 and num_articles >= 3)
+                )
+                
+                if not is_valid_topic:
+                    rejected_low_quality += num_articles
+                    continue
+                
+                # Determinar prioridad basada en cantidad de artículos Y fuentes
+                num_articles = len(article_ids)
+                num_sources = len(sources)
+                
+                # Dar más prioridad a topics con muchas fuentes
+                if num_articles >= 20 or num_sources >= 5:
+                    priority = 1  # Gigante - noticia muy importante
+                elif num_articles >= 10 or num_sources >= 4:
+                    priority = 2  # Importante
+                elif num_articles >= 5 or num_sources >= 3:
+                    priority = 3  # Medio
+                else:
+                    priority = 4  # Secundario
+                
+                # Formatear tags como "#tag,#tag,#tag,#country,#date"
+                formatted_tags = ','.join([f"#{tag.replace('_', '')}" for tag in sorted(tags)[:10]])
+                if country and country != "General":
+                    formatted_tags += f",#{country.replace(' ', '')}"
+                if event_date:
+                    formatted_tags += f",#{event_date.strftime('%Y-%m-%d')}"
+                
+                # Calcular relevancia de cada artículo en el topic
+                article_relevance_scores = self._calculate_article_relevance(article_ids, tags, articles)
+                
+                # Generar resumen mejorado usando los artículos más relevantes
+                enhanced_summary = self._generate_enhanced_summary(
+                    article_ids, 
+                    article_relevance_scores, 
+                    articles,
+                    topic_title
+                )
+                
+                processed_topics.append(TopicData(
+                    topic_id=str(topic_id_counter),
+                    title=topic_title,
+                    summary=enhanced_summary,
+                    main_image_url=f"https://cdn.minerva.ai/topic_{topic_id_counter}.jpg",
+                    priority=priority,
+                    category=category,
+                    subcategory=subcategory,
+                    topic_theme=theme,
+                    topic_subtema=subtema,  # Nivel 4
+                    country=country if country != "General" else None,
+                    tags=formatted_tags,
+                    event_date=event_date,
+                    article_ids=article_ids,
+                    article_relevance_scores=article_relevance_scores
+                ))
+                topic_id_counter += 1
+        
+        print(f"\n📊 Resultado: {len(processed_topics)} topics creados (validación balanceada)")
+        print(f"📊 Artículos rechazados (baja calidad): {rejected_low_quality}")
+        print(f"📊 Claves únicas (categoría+país+fecha): {len(topics_by_key)}")
+        print(f"📊 Topics por categoría: {len(topics_by_key)} agrupaciones")
+        return processed_topics
+
+    def _calculate_article_relevance(self, article_ids: List[str], topic_tags: set, all_articles: List[Article]) -> dict:
+        """
+        Calcula el porcentaje de relevancia de cada artículo en el topic.
+        
+        Factores de relevancia:
+        - Tags compartidos con el topic (60%)
+        - Posición temporal (20%) - artículos más recientes son más relevantes
+        - Tamaño del contenido (20%) - artículos más completos son más relevantes
+        
+        Returns:
+            dict: {article_id: relevance_percentage}
+        """
+        # Crear lookup de artículos por ID
+        articles_dict = {art.id: art for art in all_articles if art.id in article_ids}
+        
+        if not articles_dict:
+            return {}
+        
+        relevance_scores = {}
+        
+        # Obtener fechas para calcular recencia
+        article_dates = []
+        for art_id in article_ids:
+            if art_id in articles_dict:
+                article = articles_dict[art_id]
+                if hasattr(article, 'published_at') and article.published_at:
+                    try:
+                        from datetime import datetime
+                        if isinstance(article.published_at, str):
+                            pub_date = datetime.fromisoformat(article.published_at.replace('Z', '+00:00'))
+                        else:
+                            pub_date = article.published_at
+                        article_dates.append((art_id, pub_date))
+                    except:
+                        pass
+        
+        # Ordenar por fecha para calcular posición temporal
+        article_dates.sort(key=lambda x: x[1], reverse=True)  # Más reciente primero
+        
+        for art_id in article_ids:
+            if art_id not in articles_dict:
+                relevance_scores[art_id] = 50.0  # Score por defecto
+                continue
+            
+            article = articles_dict[art_id]
+            score = 0.0
+            
+            # 1. Tags compartidos (60 puntos máximo)
+            article_text = f"{article.title} {article.description or ''}".lower()
+            article_tags = set(self.extract_tags(article))
+            shared_tags = article_tags & topic_tags
+            
+            if topic_tags:
+                tag_similarity = len(shared_tags) / len(topic_tags)
+                score += min(tag_similarity * 100, 60.0)  # Máximo 60 puntos
+            else:
+                score += 30.0  # Score base si no hay tags
+            
+            # 2. Posición temporal (20 puntos máximo)
+            # Artículos más recientes obtienen mayor score
+            if article_dates:
+                position = next((i for i, (aid, _) in enumerate(article_dates) if aid == art_id), len(article_dates))
+                temporal_score = (1 - position / len(article_dates)) * 20
+                score += temporal_score
+            else:
+                score += 10.0  # Score medio si no hay fechas
+            
+            # 3. Completitud del contenido (20 puntos máximo)
+            title_length = len(article.title) if article.title else 0
+            desc_length = len(article.description) if article.description else 0
+            content_length = title_length + desc_length
+            
+            # Normalizar: artículos con 500+ caracteres obtienen máximo puntaje
+            content_score = min(content_length / 500, 1.0) * 20
+            score += content_score
+            
+            # Asegurar que el score esté entre 0 y 100
+            relevance_scores[art_id] = min(max(score, 0.0), 100.0)
+        
+        return relevance_scores
+    
+    def _generate_enhanced_summary(self, article_ids: List[str], relevance_scores: dict, 
+                                   all_articles: List[Article], topic_title: str) -> str:
+        """
+        Genera un resumen mejorado usando los artículos más relevantes del topic.
+        
+        Prioriza artículos con mayor relevancia para construir un resumen más informativo.
+        """
+        # Crear lookup de artículos
+        articles_dict = {art.id: art for art in all_articles if art.id in article_ids}
+        
+        if not articles_dict:
+            return topic_title[:300]
+        
+        # Ordenar artículos por relevancia
+        sorted_articles = sorted(
+            article_ids,
+            key=lambda aid: relevance_scores.get(aid, 0),
+            reverse=True
+        )
+        
+        # Tomar los 3 artículos más relevantes
+        top_articles = sorted_articles[:3]
+        
+        # Construir resumen combinando información de los artículos más relevantes
+        summary_parts = []
+        seen_content = set()
+        
+        for art_id in top_articles:
+            if art_id not in articles_dict:
+                continue
+            
+            article = articles_dict[art_id]
+            
+            # Usar descripción si está disponible
+            if article.description:
+                desc = article.description.strip()
+                # Evitar duplicados
+                desc_lower = desc.lower()[:100]
+                if desc_lower not in seen_content:
+                    summary_parts.append(desc)
+                    seen_content.add(desc_lower)
+            elif article.title and article.title != topic_title:
+                title_lower = article.title.lower()[:100]
+                if title_lower not in seen_content:
+                    summary_parts.append(article.title)
+                    seen_content.add(title_lower)
+        
+        # Combinar los resúmenes
+        if summary_parts:
+            combined_summary = " ".join(summary_parts)
+            # Limitar a 500 caracteres para mantener conciso
+            if len(combined_summary) > 500:
+                combined_summary = combined_summary[:497] + "..."
+            return combined_summary
+        
+        # Fallback: usar título si no hay descripciones
+        return topic_title[:300]
