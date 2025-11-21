@@ -25,4 +25,8 @@ class NewsProcessingService:
         # 3. Guardar los nuevos tópicos y actualizar los artículos
         for topic in processed_topics:
             # Los IDs de artículos vienen directamente del TopicData
-            self._repository.save_new_topic(topic, topic.article_ids)
+            self._repository.save_new_topic(
+                topic, 
+                topic.article_ids,
+                topic.article_relevance_scores
+            )

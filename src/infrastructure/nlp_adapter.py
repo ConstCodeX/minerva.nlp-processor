@@ -689,10 +689,21 @@ class NLPAdapter(NLPService):
                 if event_date:
                     formatted_tags += f",#{event_date.strftime('%Y-%m-%d')}"
                 
+                # Calcular relevancia de cada artículo en el topic
+                article_relevance_scores = self._calculate_article_relevance(article_ids, tags, articles)
+                
+                # Generar resumen mejorado usando los artículos más relevantes
+                enhanced_summary = self._generate_enhanced_summary(
+                    article_ids, 
+                    article_relevance_scores, 
+                    articles,
+                    topic_title
+                )
+                
                 processed_topics.append(TopicData(
                     topic_id=str(topic_id_counter),
                     title=topic_title,
-                    summary=topic_summary,
+                    summary=enhanced_summary,
                     main_image_url=f"https://cdn.minerva.ai/topic_{topic_id_counter}.jpg",
                     priority=priority,
                     category=category,
@@ -701,7 +712,8 @@ class NLPAdapter(NLPService):
                     country=country if country != "General" else None,
                     tags=formatted_tags,
                     event_date=event_date,
-                    article_ids=article_ids
+                    article_ids=article_ids,
+                    article_relevance_scores=article_relevance_scores
                 ))
                 topic_id_counter += 1
         
@@ -710,3 +722,142 @@ class NLPAdapter(NLPService):
         print(f"📊 Claves únicas (categoría+país+fecha): {len(topics_by_key)}")
         print(f"📊 Topics por categoría: {len(topics_by_key)} agrupaciones")
         return processed_topics
+
+    def _calculate_article_relevance(self, article_ids: List[str], topic_tags: set, all_articles: List[Article]) -> dict:
+        """
+        Calcula el porcentaje de relevancia de cada artículo en el topic.
+        
+        Factores de relevancia:
+        - Tags compartidos con el topic (60%)
+        - Posición temporal (20%) - artículos más recientes son más relevantes
+        - Tamaño del contenido (20%) - artículos más completos son más relevantes
+        
+        Returns:
+            dict: {article_id: relevance_percentage}
+        """
+        # Crear lookup de artículos por ID
+        articles_dict = {art.id: art for art in all_articles if art.id in article_ids}
+        
+        if not articles_dict:
+            return {}
+        
+        relevance_scores = {}
+        
+        # Obtener fechas para calcular recencia
+        article_dates = []
+        for art_id in article_ids:
+            if art_id in articles_dict:
+                article = articles_dict[art_id]
+                if hasattr(article, 'published_at') and article.published_at:
+                    try:
+                        from datetime import datetime
+                        if isinstance(article.published_at, str):
+                            pub_date = datetime.fromisoformat(article.published_at.replace('Z', '+00:00'))
+                        else:
+                            pub_date = article.published_at
+                        article_dates.append((art_id, pub_date))
+                    except:
+                        pass
+        
+        # Ordenar por fecha para calcular posición temporal
+        article_dates.sort(key=lambda x: x[1], reverse=True)  # Más reciente primero
+        
+        for art_id in article_ids:
+            if art_id not in articles_dict:
+                relevance_scores[art_id] = 50.0  # Score por defecto
+                continue
+            
+            article = articles_dict[art_id]
+            score = 0.0
+            
+            # 1. Tags compartidos (60 puntos máximo)
+            article_text = f"{article.title} {article.description or ''}".lower()
+            article_tags = set(self.extract_tags(article))
+            shared_tags = article_tags & topic_tags
+            
+            if topic_tags:
+                tag_similarity = len(shared_tags) / len(topic_tags)
+                score += min(tag_similarity * 100, 60.0)  # Máximo 60 puntos
+            else:
+                score += 30.0  # Score base si no hay tags
+            
+            # 2. Posición temporal (20 puntos máximo)
+            # Artículos más recientes obtienen mayor score
+            if article_dates:
+                position = next((i for i, (aid, _) in enumerate(article_dates) if aid == art_id), len(article_dates))
+                temporal_score = (1 - position / len(article_dates)) * 20
+                score += temporal_score
+            else:
+                score += 10.0  # Score medio si no hay fechas
+            
+            # 3. Completitud del contenido (20 puntos máximo)
+            title_length = len(article.title) if article.title else 0
+            desc_length = len(article.description) if article.description else 0
+            content_length = title_length + desc_length
+            
+            # Normalizar: artículos con 500+ caracteres obtienen máximo puntaje
+            content_score = min(content_length / 500, 1.0) * 20
+            score += content_score
+            
+            # Asegurar que el score esté entre 0 y 100
+            relevance_scores[art_id] = min(max(score, 0.0), 100.0)
+        
+        return relevance_scores
+    
+    def _generate_enhanced_summary(self, article_ids: List[str], relevance_scores: dict, 
+                                   all_articles: List[Article], topic_title: str) -> str:
+        """
+        Genera un resumen mejorado usando los artículos más relevantes del topic.
+        
+        Prioriza artículos con mayor relevancia para construir un resumen más informativo.
+        """
+        # Crear lookup de artículos
+        articles_dict = {art.id: art for art in all_articles if art.id in article_ids}
+        
+        if not articles_dict:
+            return topic_title[:300]
+        
+        # Ordenar artículos por relevancia
+        sorted_articles = sorted(
+            article_ids,
+            key=lambda aid: relevance_scores.get(aid, 0),
+            reverse=True
+        )
+        
+        # Tomar los 3 artículos más relevantes
+        top_articles = sorted_articles[:3]
+        
+        # Construir resumen combinando información de los artículos más relevantes
+        summary_parts = []
+        seen_content = set()
+        
+        for art_id in top_articles:
+            if art_id not in articles_dict:
+                continue
+            
+            article = articles_dict[art_id]
+            
+            # Usar descripción si está disponible
+            if article.description:
+                desc = article.description.strip()
+                # Evitar duplicados
+                desc_lower = desc.lower()[:100]
+                if desc_lower not in seen_content:
+                    summary_parts.append(desc)
+                    seen_content.add(desc_lower)
+            elif article.title and article.title != topic_title:
+                title_lower = article.title.lower()[:100]
+                if title_lower not in seen_content:
+                    summary_parts.append(article.title)
+                    seen_content.add(title_lower)
+        
+        # Combinar los resúmenes
+        if summary_parts:
+            combined_summary = " ".join(summary_parts)
+            # Limitar a 500 caracteres para mantener conciso
+            if len(combined_summary) > 500:
+                combined_summary = combined_summary[:497] + "..."
+            return combined_summary
+        
+        # Fallback: usar título si no hay descripciones
+        return topic_title[:300]

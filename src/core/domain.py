@@ -30,4 +30,5 @@ class TopicData:
     tags: str  # Tags separados por comas: "#trump,#política,#usa,#2025-11-20"
     event_date: str  # Fecha del evento (YYYY-MM-DD)
     article_ids: List[str]  # Lista de IDs de artículos que pertenecen a este topic
+    article_relevance_scores: dict = None  # Dict {article_id: relevance_score_percentage}
     # article_links será manejado por el adaptador de DB como JSONB

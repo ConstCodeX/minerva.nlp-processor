@@ -41,8 +41,15 @@ class NeonDBAdapter(ArticleRepository):
         conn.close()
         return articles
 
-    def save_new_topic(self, topic: TopicData, article_ids: List[int]):
-        """Guarda el tópico con categorización jerárquica y actualiza los artículos en una transacción."""
+    def save_new_topic(self, topic: TopicData, article_ids: List[int], article_relevance_scores: dict = None):
+        """
+        Guarda el tópico con categorización jerárquica y actualiza los artículos en una transacción.
+        
+        Args:
+            topic: Datos del topic a guardar
+            article_ids: Lista de IDs de artículos
+            article_relevance_scores: Diccionario {article_id: relevance_score} con porcentajes de relevancia
+        """
         conn = psycopg2.connect(self.conn_string)
         conn.autocommit = False # Inicia la transacción
         cursor = conn.cursor()
@@ -50,24 +57,44 @@ class NeonDBAdapter(ArticleRepository):
         try:
             # 1. Obtener datos completos de los artículos (incluyendo imágenes)
             cursor.execute("""
-                SELECT a.url, a.source, a.publication_date, a.title,
-                       (SELECT i.url FROM images i WHERE i.article_id = a.id LIMIT 1) as image_url
+                SELECT a.id, a.url, a.source, a.publication_date, a.title,
+                       (SELECT i.url FROM images i WHERE i.article_id = a.id ORDER BY i.width DESC LIMIT 1) as image_url
                 FROM articles a
-                WHERE a.id = ANY(%s);
+                WHERE a.id = ANY(%s)
+                ORDER BY a.publication_date DESC;
             """, (article_ids,))
             
-            links_data = [
-                {
-                    "url": row[0],
-                    "source": row[1],
-                    "publication_date": row[2].isoformat() if row[2] else None,
-                    "title": row[3],
-                    "image_url": row[4]
+            articles_data = cursor.fetchall()
+            
+            # 2. Construir links_data con relevancia y ordenar por relevancia
+            links_data = []
+            best_image_url = None
+            
+            for row in articles_data:
+                article_id = row[0]
+                relevance = article_relevance_scores.get(article_id, 50.0) if article_relevance_scores else 50.0
+                
+                article_link = {
+                    "url": row[1],
+                    "source": row[2],
+                    "publication_date": row[3].isoformat() if row[3] else None,
+                    "title": row[4],
+                    "image_url": row[5],
+                    "relevance_score": round(relevance, 1)
                 }
-                for row in cursor.fetchall()
-            ]
+                links_data.append(article_link)
+                
+                # Usar imagen del artículo más relevante (o el primero con imagen)
+                if not best_image_url and row[5]:
+                    best_image_url = row[5]
+            
+            # Ordenar por relevancia descendente
+            links_data.sort(key=lambda x: x['relevance_score'], reverse=True)
+            
+            # 3. Usar imagen real del artículo más relevante
+            main_image = best_image_url if best_image_url else topic.main_image_url
 
-            # 2. Insertar Tópico con nuevos campos jerárquicos
+            # 4. Insertar Tópico con nuevos campos jerárquicos
             insert_topic_query = """
                 INSERT INTO topics (
                     title, summary, main_image_url, priority, category, 
@@ -80,7 +107,7 @@ class NeonDBAdapter(ArticleRepository):
             cursor.execute(insert_topic_query, (
                 topic.title, 
                 topic.summary, 
-                topic.main_image_url, 
+                main_image,  # Usar imagen real del artículo más relevante
                 topic.priority, 
                 topic.category,
                 topic.subcategory,
@@ -92,14 +119,17 @@ class NeonDBAdapter(ArticleRepository):
             ))
             new_topic_id = cursor.fetchone()[0]
 
-            # 3. Actualizar Artículos
+            # 5. Actualizar Artículos
             update_articles_query = """
                 UPDATE articles SET topic_id = %s WHERE id = ANY(%s);
             """
             cursor.execute(update_articles_query, (new_topic_id, article_ids))
             
             conn.commit()
-            print(f"✓ Tópico #{new_topic_id} creado: {topic.category} → {topic.subcategory} → {topic.topic_theme} [{topic.country}] ({len(article_ids)} artículos)")
+            
+            # Log con información de relevancia
+            avg_relevance = sum(x['relevance_score'] for x in links_data) / len(links_data) if links_data else 0
+            print(f"✓ Tópico #{new_topic_id} creado: {topic.category} → {topic.subcategory} → {topic.topic_theme} [{topic.country}] ({len(article_ids)} artículos, relevancia promedio: {avg_relevance:.1f}%)")
         
         except Exception as e:
             conn.rollback()
