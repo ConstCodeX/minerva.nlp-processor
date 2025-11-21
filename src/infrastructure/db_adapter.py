@@ -182,18 +182,19 @@ class NeonDBAdapter(ArticleRepository):
         
         articles = []
         for row in cursor.fetchall():
+            # Crear Article usando el modelo correcto de src/core/domain.py
+            # El modelo tiene: id, title, description, content_code, url, category, source, tags, published_at
             article = Article(
-                id=row[0], 
-                title=row[1], 
-                description=row[2], 
-                content_code=row[3],
-                url=row[4],
+                id=row[0],
+                title=row[1],
+                description=row[2],
+                content_code=row[4],
+                url=row[3],
                 category=row[5] or "General",
                 source=row[6],
-                published_at=row[7]
+                tags=row[8] if row[8] else [],
+                published_at=str(row[7]) if row[7] else None
             )
-            # Tags vienen como lista JSON desde jsonb
-            article.tags = row[8] if row[8] else []
             articles.append(article)
         
         cursor.close()
@@ -217,9 +218,9 @@ class NeonDBAdapter(ArticleRepository):
             cursor.execute("""
                 INSERT INTO topics (
                     title, category, country, tags, event_date, 
-                    article_links, is_final, created_at
+                    article_links, priority, is_final, created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW()) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW()) 
                 RETURNING id;
             """, (
                 temp_title,
@@ -228,6 +229,7 @@ class NeonDBAdapter(ArticleRepository):
                 tags_str,
                 event_date,
                 json.dumps([]),  # Links vacíos por ahora
+                3,  # Priority por defecto (1: Gigante, 2-3: Importante, 4: Secundario)
                 False  # Marcar como no final
             ))
             
