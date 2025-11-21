@@ -141,3 +141,206 @@ class NeonDBAdapter(ArticleRepository):
         finally:
             cursor.close()
             conn.close()
+
+    def update_article_tags(self, article_id: int, tags: List[str]):
+        """Actualiza los tags de un artículo específico"""
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        try:
+            # Convertir tags a formato JSON array para columna jsonb
+            import json
+            tags_json = json.dumps(tags) if tags else json.dumps([])
+            
+            cursor.execute("""
+                UPDATE articles 
+                SET tags = %s::jsonb 
+                WHERE id = %s;
+            """, (tags_json, article_id))
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"✗ Error actualizando tags del artículo {article_id}: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+
+    def fetch_articles_with_tags(self) -> List[Article]:
+        """Obtiene artículos que tienen tags pero no están asignados a un topic"""
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, title, description, url, content_code, category, source, publication_date, tags
+            FROM articles 
+            WHERE topic_id IS NULL 
+            AND tags IS NOT NULL 
+            AND jsonb_array_length(tags) > 0
+            ORDER BY publication_date DESC;
+        """)
+        
+        articles = []
+        for row in cursor.fetchall():
+            article = Article(
+                id=row[0], 
+                title=row[1], 
+                description=row[2], 
+                content_code=row[3],
+                url=row[4],
+                category=row[5] or "General",
+                source=row[6],
+                published_at=row[7]
+            )
+            # Tags vienen como lista JSON desde jsonb
+            article.tags = row[8] if row[8] else []
+            articles.append(article)
+        
+        cursor.close()
+        conn.close()
+        return articles
+
+    def save_cluster(self, temp_title: str, category: str, country: str, 
+                     event_date, tags: List[str], article_ids: List[int]) -> int:
+        """
+        Guarda un cluster (pre-topic) sin título final.
+        Retorna el ID del cluster creado.
+        """
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        try:
+            # Convertir tags a formato tag1,tag2
+            tags_str = ",".join(tags) if tags else ""
+            
+            # Crear topic temporal
+            cursor.execute("""
+                INSERT INTO topics (
+                    title, category, country, tags, event_date, 
+                    article_links, is_final, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW()) 
+                RETURNING id;
+            """, (
+                temp_title,
+                category,
+                country,
+                tags_str,
+                event_date,
+                json.dumps([]),  # Links vacíos por ahora
+                False  # Marcar como no final
+            ))
+            
+            cluster_id = cursor.fetchone()[0]
+            
+            # Asociar artículos al cluster
+            cursor.execute("""
+                UPDATE articles 
+                SET topic_id = %s 
+                WHERE id = ANY(%s);
+            """, (cluster_id, article_ids))
+            
+            conn.commit()
+            return cluster_id
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"✗ Error guardando cluster: {e}")
+            return None
+        finally:
+            cursor.close()
+            conn.close()
+
+    def fetch_clusters_without_titles(self) -> List[dict]:
+        """Obtiene clusters que necesitan título final (is_final = false)"""
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT t.id, t.title, t.category, t.country, t.tags, t.event_date,
+                   array_agg(a.id) as article_ids
+            FROM topics t
+            LEFT JOIN articles a ON a.topic_id = t.id
+            WHERE t.is_final = false OR t.is_final IS NULL
+            GROUP BY t.id, t.title, t.category, t.country, t.tags, t.event_date
+            ORDER BY t.created_at DESC;
+        """)
+        
+        clusters = []
+        for row in cursor.fetchall():
+            tags_str = row[4] or ""
+            tags = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+            
+            clusters.append({
+                'id': row[0],
+                'temp_title': row[1],
+                'category': row[2],
+                'country': row[3],
+                'tags': tags,
+                'event_date': row[5],
+                'article_ids': row[6] or []
+            })
+        
+        cursor.close()
+        conn.close()
+        return clusters
+
+    def fetch_articles_by_ids(self, article_ids: List[int]) -> List[Article]:
+        """Obtiene artículos por sus IDs"""
+        if not article_ids:
+            return []
+        
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, title, description, url, content_code, category, source, publication_date
+            FROM articles 
+            WHERE id = ANY(%s)
+            ORDER BY publication_date DESC;
+        """, (article_ids,))
+        
+        articles = [
+            Article(
+                id=row[0], 
+                title=row[1], 
+                description=row[2], 
+                content_code=row[3],
+                url=row[4],
+                category=row[5] or "General",
+                source=row[6],
+                published_at=row[7]
+            ) 
+            for row in cursor.fetchall()
+        ]
+        
+        cursor.close()
+        conn.close()
+        return articles
+
+    def update_cluster_with_title(self, cluster_id: int, title: str, 
+                                  category: str, subcategory: str, 
+                                  theme: str, subtema: str):
+        """Actualiza un cluster con su título final y categorización completa"""
+        conn = psycopg2.connect(self.conn_string)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                UPDATE topics 
+                SET title = %s,
+                    category = %s,
+                    subcategory = %s,
+                    topic_theme = %s,
+                    topic_subtema = %s,
+                    is_final = true
+                WHERE id = %s;
+            """, (title, category, subcategory, theme, subtema, cluster_id))
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"✗ Error actualizando cluster {cluster_id}: {e}")
+        finally:
+            cursor.close()
+            conn.close()

@@ -11,3 +11,4 @@ sentencepiece
 pandas
 scikit-learn
 nltk # Para pre-procesamiento de texto en español
+tqdm # Para barras de progreso en CLI

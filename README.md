@@ -22,14 +22,63 @@ pip install -r requirements.txt
 cp .env.example .env
 # Editar .env y agregar NEON_CONN_STRING
 
-# 3. Probar IA local (descarga modelos ~600MB)
-python3 test_local_ai.py
+# 3. Aplicar migración (agregar columnas para procesamiento por etapas)
+psql $NEON_CONN_STRING -f migrations/migration_008_staged_processing.sql
 
-# 4. Procesar artículos
-python3 main.py
+# 4. Probar IA local (descarga modelos ~600MB)
+python3 test_local_ai.py
 ```
 
 **Nota**: Primera ejecución descarga modelos (~600MB), luego funciona offline.
+
+## 🔄 Procesamiento por Etapas (Recomendado)
+
+El procesamiento se divide en 3 pasos independientes para mejor visibilidad:
+
+### **Paso 1: Extracción de Tags** 
+```bash
+python3 main_step1_tags.py
+```
+- Lee artículos sin procesar
+- Extrae tags con IA local (NER)
+- Guarda tags en BD
+- Muestra progreso con barra en tiempo real
+
+### **Paso 2: Clustering de Artículos**
+```bash
+python3 main_step2_clustering.py
+```
+- Agrupa artículos similares por tags compartidos
+- Discrimina por país y fecha
+- Valida mínimo 2 fuentes diferentes
+- Crea pre-topics (clusters) en BD
+
+### **Paso 3: Generación de Títulos**
+```bash
+python3 main_step3_titles.py
+```
+- Analiza cada cluster con IA
+- Genera título único y descriptivo
+- Extrae categorización jerárquica completa
+- Finaliza topics en BD
+
+### Ejemplo de ejecución:
+```bash
+# Procesar todo en secuencia
+python3 main_step1_tags.py && \
+python3 main_step2_clustering.py && \
+python3 main_step3_titles.py
+```
+
+## 🚀 Procesamiento Directo (Alternativa)
+
+Si prefieres procesar todo de una vez:
+
+```bash
+python3 main.py
+```
+
+Este comando ejecuta todo el pipeline sin pausas (útil para GitHub Actions).
 
 ## 🤖 IA 100% Local
 
