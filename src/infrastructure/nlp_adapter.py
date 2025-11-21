@@ -390,6 +390,11 @@ class NLPAdapter(NLPService):
                 subcategory = "TV y Streaming"
                 if 'netflix' in text:
                     theme = "Netflix"
+            elif any(word in text for word in ['miss universo', 'miss perú', 'miss mundo', 'concurso de belleza', 'sheynnis']):
+                subcategory = "Concursos de Belleza"
+                theme = "Miss Universo"
+            elif any(word in text for word in ['farándula', 'famoso', 'celebridad', 'espectáculo']):
+                subcategory = "Farándula"
         
         # GENERAL (eventos naturales, otros)
         elif category == "General":

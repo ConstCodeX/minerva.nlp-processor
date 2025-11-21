@@ -48,18 +48,21 @@ class NeonDBAdapter(ArticleRepository):
         cursor = conn.cursor()
         
         try:
-            # 1. Obtener URLs reales de los artículos
+            # 1. Obtener datos completos de los artículos (incluyendo imágenes)
             cursor.execute("""
-                SELECT url, source, publication_date 
-                FROM articles 
-                WHERE id = ANY(%s);
+                SELECT a.url, a.source, a.publication_date, a.title,
+                       (SELECT i.url FROM images i WHERE i.article_id = a.id LIMIT 1) as image_url
+                FROM articles a
+                WHERE a.id = ANY(%s);
             """, (article_ids,))
             
             links_data = [
                 {
                     "url": row[0],
                     "source": row[1],
-                    "publication_date": row[2].isoformat() if row[2] else None
+                    "publication_date": row[2].isoformat() if row[2] else None,
+                    "title": row[3],
+                    "image_url": row[4]
                 }
                 for row in cursor.fetchall()
             ]
