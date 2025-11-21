@@ -20,12 +20,39 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
         
-      - name: Run NLP Processor con IA Local (Hugging Face)
+      - name: Test componentes sin BD (IA Local)
+        run: |
+          echo "🧪 Probando componentes del sistema..."
+          python test_without_db.py
+          
+      - name: Run NLP Processor - Fase 1 (Tags)
         env:
-          # Solo necesitas DB connection (sin API keys)
           NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
-        run: python main.py
+        run: |
+          echo "📋 FASE 1: Extrayendo tags con IA..."
+          python main_step1_tags.py
+          
+      - name: Run NLP Processor - Fase 2 (Clustering)
+        env:
+          NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
+        run: |
+          echo "🔗 FASE 2: Agrupando artículos similares..."
+          python main_step2_clustering.py
+          
+      - name: Run NLP Processor - Fase 3 (Títulos IA)
+        env:
+          NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
+        run: |
+          echo "✨ FASE 3: Generando títulos con IA..."
+          python main_step3_titles.py
         
-      - name: Nota
+      - name: Resumen
         if: always()
-        run: echo "ℹ️ Modelos de IA descargados automáticamente (~500MB). Sin API keys necesarias."
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Procesamiento completado"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🤖 IA 100% local (Hugging Face)"
+          echo "💰 $0 costo"
+          echo "🚀 Sin rate limits"
+          echo "📦 Modelos descargados automáticamente (~1GB, una vez)"
