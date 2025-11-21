@@ -289,25 +289,80 @@ def main():
                             pbar.update(1)
                             continue
                         
-                        first_article = articles[0]
+                        # Usar el artículo más relevante (primero) como base
+                        main_article = articles[0]
                         
+                        # Generar título realista basado en los artículos
+                        # Usar el título del artículo principal como base
+                        title = main_article.title.strip()
+                        
+                        # Si el título es muy largo, resumirlo manteniendo la esencia
+                        if len(title) > 120:
+                            # Tomar las primeras palabras hasta 120 caracteres
+                            words = title.split()
+                            title = ""
+                            for word in words:
+                                if len(title) + len(word) + 1 <= 120:
+                                    title += word + " "
+                                else:
+                                    break
+                            title = title.strip() + "..."
+                        
+                        # Generar summary combinando las descripciones de los artículos
+                        descriptions = []
+                        for article in articles[:3]:  # Máximo 3 descripciones
+                            if article.description and len(article.description) > 20:
+                                desc = article.description.strip()
+                                if len(desc) > 150:
+                                    desc = desc[:147] + "..."
+                                descriptions.append(desc)
+                        
+                        summary = " | ".join(descriptions) if descriptions else title
+                        if len(summary) > 500:
+                            summary = summary[:497] + "..."
+                        
+                        # Categorización jerárquica
                         category, subcategory, theme, subtema = categorization_service.categorize(
-                            first_article,
+                            main_article,
                             cluster.get('category', 'General')
                         )
                         
-                        if theme and subtema and theme != "Sin clasificar":
-                            title = f"{theme}: {subtema}"[:200]
-                        else:
-                            title = first_article.title[:200]
+                        # Extraer main_image_url del primer artículo si tiene imágenes
+                        main_image_url = ""
+                        if hasattr(main_article, 'content_code') and main_article.content_code:
+                            # Buscar URL de imagen en el HTML del content_code
+                            import re
+                            img_match = re.search(r'<img[^>]+src="([^"]+)"', main_article.content_code)
+                            if img_match:
+                                main_image_url = img_match.group(1)
                         
+                        # Crear article_links para las fuentes
+                        article_links = []
+                        for article in articles:
+                            pub_date = None
+                            if hasattr(article, 'published_at') and article.published_at:
+                                # Convertir datetime a string ISO format
+                                if hasattr(article.published_at, 'isoformat'):
+                                    pub_date = article.published_at.isoformat()
+                                else:
+                                    pub_date = str(article.published_at)
+                            
+                            article_links.append({
+                                "url": article.url if hasattr(article, 'url') and article.url else "",
+                                "source": article.source if hasattr(article, 'source') else "unknown",
+                                "publication_date": pub_date
+                            })
+                        
+                        # Actualizar cluster con toda la información
                         repository.update_cluster_with_title(
                             cluster_id=cluster['id'],
                             title=title,
+                            summary=summary,
+                            main_image_url=main_image_url,
                             category=category,
                             subcategory=subcategory,
                             theme=theme,
-                            subtema=subtema
+                            article_links=article_links
                         )
                         
                         processed += 1

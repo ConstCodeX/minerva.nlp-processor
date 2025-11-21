@@ -321,23 +321,31 @@ class NeonDBAdapter(ArticleRepository):
         return articles
 
     def update_cluster_with_title(self, cluster_id: int, title: str, 
+                                  summary: str,
+                                  main_image_url: str,
                                   category: str, subcategory: str, 
-                                  theme: str, subtema: str):
-        """Actualiza un cluster con su título final y categorización completa"""
+                                  theme: str,
+                                  article_links: list = None):
+        """Actualiza un cluster con su título final, summary, imagen, categorización completa y links de fuentes"""
         conn = psycopg2.connect(self.conn_string)
         cursor = conn.cursor()
         
         try:
+            # Convertir article_links a JSON
+            article_links_json = json.dumps(article_links) if article_links else json.dumps([])
+            
             cursor.execute("""
                 UPDATE topics 
                 SET title = %s,
+                    summary = %s,
+                    main_image_url = %s,
                     category = %s,
                     subcategory = %s,
                     topic_theme = %s,
-                    topic_subtema = %s,
+                    article_links = %s,
                     is_final = true
                 WHERE id = %s;
-            """, (title, category, subcategory, theme, subtema, cluster_id))
+            """, (title, summary, main_image_url, category, subcategory, theme, article_links_json, cluster_id))
             
             conn.commit()
         except Exception as e:
