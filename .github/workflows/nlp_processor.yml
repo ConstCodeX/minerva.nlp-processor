@@ -20,9 +20,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
         
-      - name: Run NLP Processor
+      - name: Run NLP Processor con IA Local (Hugging Face)
         env:
-          # Configura estos secrets en: Settings → Secrets → Actions
+          # Solo necesitas DB connection (sin API keys)
           NEON_CONN_STRING: ${{ secrets.NEON_CONN_STRING }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python main.py
+        
+      - name: Nota
+        if: always()
+        run: echo "ℹ️ Modelos de IA descargados automáticamente (~500MB). Sin API keys necesarias."

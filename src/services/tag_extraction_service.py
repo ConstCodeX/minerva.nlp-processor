@@ -5,7 +5,7 @@ Responsabilidad única: Extraer tags relevantes de artículos
 
 from typing import List
 from src.core.domain import Article
-from src.adapters.ai_adapter import AIServiceAdapter
+from src.adapters.local_ai_adapter import AIServiceAdapter
 
 
 class TagExtractionService:

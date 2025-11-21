@@ -5,7 +5,7 @@ Responsabilidad única: Categorizar artículos usando IA o fallback
 
 from typing import Tuple
 from src.core.domain import Article
-from src.adapters.ai_adapter import AIServiceAdapter
+from src.adapters.local_ai_adapter import AIServiceAdapter
 
 
 class CategorizationService:

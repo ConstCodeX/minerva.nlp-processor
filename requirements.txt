@@ -2,8 +2,10 @@
 psycopg2-binary
 python-dotenv
 
-# IA y NLP - Groq API (100% GRATIS, ultra-rápido)
-groq>=0.4.0
+# IA Local (Hugging Face Transformers - 100% gratis, sin límites, sin API keys)
+transformers>=4.30.0
+torch>=2.0.0
+sentencepiece
 
 # Procesamiento de Datos
 pandas

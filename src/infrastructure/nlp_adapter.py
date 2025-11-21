@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Tuple
 from datetime import datetime, date
 from src.core.ports import NLPService
 from src.core.domain import Article, TopicData
-from src.adapters.ai_adapter import AIServiceFactory
+from src.adapters.local_ai_adapter import AIServiceFactory
 from src.services.categorization_service import CategorizationService
 from src.services.tag_extraction_service import TagExtractionService
 from src.services.country_detection_service import CountryDetectionService
@@ -34,28 +34,31 @@ except LookupError:
 SPANISH_STOPWORDS = set(stopwords.words('spanish'))
 
 class NLPAdapter(NLPService):
-    def __init__(self, use_ai: bool = True, ai_provider: str = "groq"):
+    def __init__(self, use_ai: bool = True):
         """
-        Inicializa el adaptador NLP con servicios especializados
+        Inicializa el adaptador NLP con IA local (Hugging Face)
         
         Args:
-            use_ai: Si es True, usa IA. Si es False, usa solo fallbacks
-            ai_provider: Proveedor de IA ('groq' [GRATIS], 'ollama', 'openai', 'claude')
+            use_ai: Si es True, usa IA local. Si es False, usa solo fallbacks
         
-        Recomendado para GitHub Actions: 'groq' (gratis, sin instalación, ultra-rápido)
+        Usa modelos locales de Hugging Face:
+        - Sin API keys
+        - Sin límites de rate
+        - 100% gratis
+        - Funciona offline después de la primera descarga
         """
-        # Inicializar adapter de IA (agnóstico del proveedor)
+        # Inicializar adapter de IA local
         ai_adapter = None
         if use_ai:
             try:
-                ai_adapter = AIServiceFactory.create_adapter(ai_provider)
+                ai_adapter = AIServiceFactory.create_adapter("local")
                 if ai_adapter.is_available():
-                    print(f"✨ IA activada: {ai_provider}")
+                    print(f"✨ IA local activada (Hugging Face)")
                 else:
-                    print(f"⚠️ {ai_provider} no disponible, usando fallbacks")
+                    print(f"⚠️ IA local no disponible, usando fallbacks")
                     ai_adapter = None
             except Exception as e:
-                print(f"⚠️ Error inicializando {ai_provider}: {e}")
+                print(f"⚠️ Error inicializando IA local: {e}")
                 ai_adapter = None
         
         # Inicializar servicios especializados (inyección de dependencias)
