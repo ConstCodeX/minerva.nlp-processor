@@ -727,7 +727,7 @@ class NLPAdapter(NLPService):
             best_similarity = 0
             best_shared_tags = 0
             
-            for i, (topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme) in enumerate(topics_by_key[key]):
+            for i, (topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema) in enumerate(topics_by_key[key]):
                 # Similitud basada en TAGS compartidos
                 shared_tags = tags_set & topic_tags
                 num_shared = len(shared_tags)
