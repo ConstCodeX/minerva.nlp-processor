@@ -68,9 +68,13 @@ class NLPAdapter(NLPService):
             return "Educación"
         
         # Internacional
-        if any(word in text_lower for word in ['internacional', 'mundo', 'eeuu', 'china', 'europa', 'rusia', 'brasil', 'argentina', 'venezuela']):
+        if any(word in text_lower for word in ['internacional', 'mundo', 'eeuu', 'china', 'europa', 'rusia', 'brasil', 'argentina', 'venezuela', 'mexico']):
             return "Internacional"
         
+        # Cultura
+        if any(word in text_lower for word in ['cultura', 'miss', 'musica', 'concierto', 'talento', 'festival', 'banda']):
+            return "Culura"
+                
         return "General"
 
     def is_relevant(self, article: Article) -> bool:
@@ -163,20 +167,25 @@ class NLPAdapter(NLPService):
         # Si no hay fecha, usar hoy
         return date.today()
 
-    def extract_hierarchical_category(self, article: Article, base_category: str) -> Tuple[str, str, str]:
+    def extract_hierarchical_category(self, article: Article, base_category: str) -> Tuple[str, str, str, str]:
         """
-        Extrae categorización jerárquica: (category, subcategory, theme)
+        Extrae categorización jerárquica de 5 niveles:
+        
+        Nivel 1 (category): Categoría principal (Política, Deportes, Espectáculos, etc.)
+        Nivel 2 (subcategory): Subcategoría específica (Presidente, Fútbol Nacional, Farándula, etc.)
+        Nivel 3 (theme): Tema principal (Donald Trump, Selección Peruana, Miss Universo, etc.)
+        Nivel 4 (subtema): Subtema específico (Gabinete, Eliminatorias, Concurso Final, etc.)
+        Nivel 5 (title): El título único del topic se genera después
         
         Retorna:
-        - category: Categoría principal (Política, Deportes, etc.)
-        - subcategory: Subcategoría específica (Presidente, Fútbol Internacional, etc.)
-        - theme: Tema específico (Donald Trump, Lionel Messi, etc.)
+        - category, subcategory, theme, subtema
         """
         text = f"{article.title} {article.description or ''}".lower()
         
         category = base_category
         subcategory = "General"
         theme = "General"
+        subtema = "General"
         
         # POLÍTICA
         if category == "Política":
@@ -222,16 +231,47 @@ class NLPAdapter(NLPService):
             # Políticos peruanos
             elif 'dina boluarte' in text or 'boluarte' in text:
                 theme = "Dina Boluarte"
+                # Subtemas de Dina Boluarte
+                if 'gabinete' in text or 'ministro' in text:
+                    subtema = "Gabinete Ministerial"
+                elif 'viaje' in text or 'rolex' in text:
+                    subtema = "Controversias"
+                elif 'protesta' in text or 'paro' in text:
+                    subtema = "Protestas Sociales"
             elif 'pedro castillo' in text or 'castillo' in text:
                 theme = "Pedro Castillo"
+                if 'juicio' in text or 'prisión' in text or 'penal' in text:
+                    subtema = "Proceso Judicial"
+                elif 'vacancia' in text or 'golpe' in text:
+                    subtema = "Golpe de Estado"
             elif 'keiko fujimori' in text or 'fujimori' in text:
                 theme = "Keiko Fujimori"
+                if 'fuerza popular' in text:
+                    subtema = "Fuerza Popular"
+                elif 'juicio' in text or 'prisión' in text:
+                    subtema = "Casos Judiciales"
             elif 'rafael lópez aliaga' in text or 'lópez aliaga' in text:
                 theme = "Rafael López Aliaga"
+                if 'lima' in text or 'alcalde' in text:
+                    subtema = "Gestión Municipal"
             elif 'verónika mendoza' in text or 'mendoza' in text:
                 theme = "Verónika Mendoza"
             elif 'antauro humala' in text or 'antauro' in text:
                 theme = "Antauro Humala"
+            elif 'betsy chávez' in text or 'betsy chavez' in text:
+                theme = "Betsy Chávez"
+                if 'ministro' in text or 'cultura' in text:
+                    subtema = "Gestión Ministerial"
+            
+            # Más políticos peruanos
+            elif 'alberto otárola' in text or 'otárola' in text:
+                theme = "Alberto Otárola"
+            elif 'gustavo adrianzén' in text or 'adrianzén' in text:
+                theme = "Gustavo Adrianzén"
+            elif 'patricia benavides' in text or 'benavides' in text:
+                theme = "Patricia Benavides"
+                if 'fiscal' in text:
+                    subtema = "Fiscalía"
             
             # Instituciones y eventos políticos
             elif 'vacancia' in text:
@@ -242,6 +282,8 @@ class NLPAdapter(NLPService):
                 theme = "Censura Ministerial"
             elif 'estado de emergencia' in text or 'toque de queda' in text:
                 theme = "Estado de Emergencia"
+            elif 'votación' in text:
+                theme = "Votacion"
         
         # DEPORTES
         elif category == "Deportes":
@@ -380,21 +422,48 @@ class NLPAdapter(NLPService):
                 subcategory = "Google"
                 theme = "Android"
         
-        # CULTURA Y ESPECTÁCULOS
-        elif category == "Cultura y Espectáculos":
+        # ESPECTÁCULOS (Nueva categoría separada para farándula, concursos, etc)
+        elif category == "Espectáculos":
+            # Farándula Peruana
+            if any(word in text for word in ['magaly', 'gisela', 'ethel pozo', 'janet barboza']):
+                subcategory = "Farándula"
+                if 'magaly medina' in text or 'magaly' in text:
+                    theme = "Magaly Medina"
+                elif 'gisela valcárcel' in text or 'gisela' in text:
+                    theme = "Gisela Valcárcel"
+            elif any(word in text for word in ['pamela franco', 'christian domínguez', 'pamela lópez', 'karla tarazona']):
+                subcategory = "Farándula"
+                theme = "Polémicas de Farándula"
+            
+            # Concursos de Belleza
+            elif any(word in text for word in ['miss universo', 'miss perú', 'miss mundo', 'concurso de belleza', 'sheynnis']):
+                subcategory = "Concursos de Belleza"
+                theme = "Miss Universo"
+                if 'miss perú' in text or 'karla bacigalupo' in text:
+                    subtema = "Miss Perú"
+                elif 'final' in text or 'ganadora' in text or 'corona' in text:
+                    subtema = "Final del Concurso"
+            
+            # Música y Conciertos
+            elif any(word in text for word in ['concierto', 'canción', 'cantante', 'músico']):
+                subcategory = "Música"
+                if 'taylor swift' in text:
+                    theme = "Taylor Swift"
+                elif 'shakira' in text:
+                    theme = "Shakira"
+                elif 'bad bunny' in text:
+                    theme = "Bad Bunny"
+        
+        # CULTURA (Solo arte y eventos culturales serios)
+        elif category == "Cultura":
             if any(word in text for word in ['cine', 'película', 'film', 'marvel', 'disney']):
                 subcategory = "Cine"
-            elif any(word in text for word in ['música', 'concierto', 'canción']):
-                subcategory = "Música"
             elif any(word in text for word in ['televisión', 'serie', 'netflix']):
                 subcategory = "TV y Streaming"
                 if 'netflix' in text:
                     theme = "Netflix"
-            elif any(word in text for word in ['miss universo', 'miss perú', 'miss mundo', 'concurso de belleza', 'sheynnis']):
-                subcategory = "Concursos de Belleza"
-                theme = "Miss Universo"
-            elif any(word in text for word in ['farándula', 'famoso', 'celebridad', 'espectáculo']):
-                subcategory = "Farándula"
+            elif any(word in text for word in ['museo', 'exposición', 'arte', 'pintura']):
+                subcategory = "Arte"
         
         # GENERAL (eventos naturales, otros)
         elif category == "General":
@@ -411,7 +480,7 @@ class NLPAdapter(NLPService):
                 subcategory = "Clima"
                 theme = "Fenómeno del Niño"
         
-        return (category, subcategory, theme)
+        return (category, subcategory, theme, subtema)
 
     def extract_tags(self, article: Article) -> List[str]:
         """
@@ -422,51 +491,123 @@ class NLPAdapter(NLPService):
         tags = []
         
         # Entidades importantes - nombres propios comunes en noticias peruanas
+        # Lista expandida masivamente para mejor categorización
         entities = [
-            # Políticos
-            'dina boluarte', 'pedro castillo', 'keiko fujimori', 'martín vizcarra', 'ollanta humala',
-            'alberto fujimori', 'alejandro toledo', 'rafael lópez aliaga', 'verónika mendoza',
-            'antauro humala', 'vladimir cerrón', 'gino ríos',
+            # Políticos Peruanos - Gobierno y Ejecutivo
+            'dina boluarte', 'pedro castillo', 'martín vizcarra', 'ollanta humala',
+            'alberto fujimori', 'alejandro toledo', 'ppk', 'pedro pablo kuczynski',
+            'alan garcía', 'valentín paniagua', 'alejandro toledo',
             
-            # Internacional
-            'donald trump', 'joe biden', 'xi jinping', 'vladimir putin', 'volodímir zelenski',
-            'javier milei', 'lula da silva', 'gustavo petro', 'nicolás maduro',
+            # Políticos Peruanos - Congreso y Partidos
+            'keiko fujimori', 'rafael lópez aliaga', 'verónika mendoza', 'antauro humala',
+            'vladimir cerrón', 'gino ríos', 'jorge montoya', 'patricia chirinos',
+            'susel paredes', 'maría del carmen alva', 'alejandro soto', 'lady camones',
+            'hernando guerra garcía', 'alex paredes', 'waldemar cerrón',
+            
+            # Políticos Peruanos - Ministerios y Gabinete
+            'betsy chávez', 'ana cecilia gervasi', 'gustavo adrianzén', 'josé arista',
+            'alberto otárola', 'aníbal torres', 'guido bellido', 'héctor béjar',
+            'césar landa', 'luis alberto otárola', 'jorge chávez cresta',
+            
+            # Políticos Peruanos - Poder Judicial y Fiscalía
+            'patricia benavides', 'juan carlos checkley', 'zoraida ávalos', 'pablo sánchez',
+            'domingo pérez', 'josé domingo pérez', 'rafael vela', 'hamilton castro',
+            
+            # Políticos Internacionales - USA
+            'donald trump', 'joe biden', 'kamala harris', 'barack obama',
+            'mike pence', 'ron desantis', 'elon musk',
+            
+            # Políticos Internacionales - Europa y Asia
+            'xi jinping', 'vladimir putin', 'volodímir zelenski', 'emmanuel macron',
+            'boris johnson', 'rishi sunak', 'olaf scholz', 'giorgia meloni',
             'benjamin netanyahu', 'isaac herzog',
             
-            # Deportes
+            # Políticos Latinoamericanos
+            'javier milei', 'lula da silva', 'gustavo petro', 'nicolás maduro',
+            'gabriel boric', 'andrés manuel lópez obrador', 'amlo', 'nayib bukele',
+            'guillermo lasso', 'luis arce', 'santiago peña',
+            
+            # Deportes - Fútbol Peruano
             'paolo guerrero', 'gianluca lapadula', 'andré carrillo', 'yoshimar yotún',
             'edison flores', 'christian cueva', 'luis advíncula', 'renato tapia',
-            'alianza lima', 'universitario', 'sporting cristal', 'melgar', 'cienciano',
-            'lionel messi', 'cristiano ronaldo', 'neymar', 'kylian mbappé',
+            'sergio peña', 'alexander callens', 'anderson santamaría', 'marcos lópez',
+            'wilder cartagena', 'piero quispe', 'jorge fossati', 'juan reynoso',
+            'ricardo gareca', 'josé guillermo del solar',
             
-            # Lugares específicos
+            # Deportes - Clubes Peruanos
+            'alianza lima', 'universitario', 'sporting cristal', 'melgar', 'cienciano',
+            'sport boys', 'deportivo municipal', 'cusco fc', 'mannucci',
+            
+            # Deportes - Internacional
+            'lionel messi', 'cristiano ronaldo', 'neymar', 'kylian mbappé',
+            'erling haaland', 'vinícius júnior', 'jude bellingham',
+            
+            # Espectáculos y Farándula Peruana
+            'magaly medina', 'gisela valcárcel', 'ethel pozo', 'brunella horna',
+            'janet barboza', 'pamela franco', 'christian domínguez', 'pamela lópez',
+            'karla tarazona', 'jefferson farfán', 'yahaira plasencia', 'melissa klug',
+            'leslie shaw', 'jossmery toledo', 'sheyla rojas', 'nicola porcella',
+            'angie arizaga', 'jota benz', 'andrea san martín',
+            
+            # Espectáculos - Internacionales
+            'taylor swift', 'shakira', 'karol g', 'bad bunny', 'peso pluma',
+            'rosalía', 'madonna', 'beyoncé', 'rihanna',
+            
+            # Miss Universo y Concursos
+            'miss universo', 'miss perú', 'karla bacigalupo', 'sheynnis palacios',
+            'alessia rovegno',
+            
+            # Lugares específicos - Perú
             'lima', 'callao', 'arequipa', 'cusco', 'trujillo', 'piura', 'iquitos',
             'machu picchu', 'línea 2', 'panamericana', 'evitamiento', 'aeropuerto jorge chávez',
+            'gamarra', 'mesa redonda', 'cercado de lima', 'miraflores', 'san isidro',
             
-            # Eventos/Temas específicos
+            # Eventos Políticos y Sociales
             'mundial 2026', 'copa américa', 'elecciones 2026', 'referéndum',
-            'estado de emergencia', 'toque de queda', 'copa libertadores', 'champions league',
-            'euro 2024', 'juegos olímpicos', 'miss universo',
+            'estado de emergencia', 'toque de queda', 'paro nacional', 'protesta',
+            'marcha', 'plantón', 'huelga',
             
-            # Instituciones
-            'congreso', 'poder judicial', 'tribunal constitucional', 'fiscalía', 'minsa',
+            # Eventos Deportivos
+            'copa libertadores', 'champions league', 'euro 2024', 'juegos olímpicos',
+            'eliminatorias', 'mundial qatar', 'liga 1', 'torneo clausura',
+            
+            # Instituciones Públicas Peruanas
+            'congreso', 'poder judicial', 'tribunal constitucional', 'fiscalía',
+            'minsa', 'minedu', 'mtc', 'midis', 'mindef', 'mininter',
             'sunat', 'bcr', 'banco central', 'indecopi', 'essalud', 'sunafil',
+            'onpe', 'jne', 'reniec', 'sutran', 'osinergmin', 'sunass',
+            'defensoría del pueblo', 'pcm', 'contraloría',
             
-            # Empresas/Organizaciones
-            'petro-perú', 'latam', 'interbank', 'bcp', 'bbva', 'scotiabank',
+            # Empresas Peruanas
+            'petro-perú', 'electroperú', 'sedapal', 'enel', 'luz del sur',
+            'edelnor', 'telefónica', 'claro', 'entel', 'bitel',
+            'interbank', 'bcp', 'bbva', 'scotiabank', 'banco de la nación',
+            'saga falabella', 'ripley', 'wong', 'metro', 'plaza vea',
             
-            # Temas específicos
-            'covid-19', 'coronavirus', 'vacuna', 'ómicron', 'bitcoin', 'criptomoneda',
-            'inteligencia artificial', 'chatgpt', 'openai', 'netflix', 'disney+',
-            'tiktok', 'instagram', 'facebook', 'twitter', 'whatsapp',
+            # Empresas Internacionales
+            'latam', 'netflix', 'disney+', 'hbo', 'prime video', 'spotify',
+            'uber', 'rappi', 'pedidos ya',
             
-            # Eventos naturales
+            # Tecnología
+            'covid-19', 'coronavirus', 'vacuna', 'ómicron', 'dengue',
+            'bitcoin', 'criptomoneda', 'ethereum', 'binance',
+            'inteligencia artificial', 'chatgpt', 'openai', 'gemini', 'claude',
+            'tiktok', 'instagram', 'facebook', 'twitter', 'x', 'whatsapp',
+            'meta', 'google', 'apple', 'microsoft', 'amazon',
+            
+            # Eventos Naturales
             'sismo', 'terremoto', 'temblor', 'tsunami', 'huracán', 'inundación',
-            'deslizamiento', 'fenómeno del niño', 'niño costero',
+            'deslizamiento', 'huaico', 'fenómeno del niño', 'niño costero',
+            'sequía', 'helada', 'friaje',
             
-            # Deportivos específicos
+            # Ligas Deportivas
             'liga 1', 'premier league', 'la liga', 'bundesliga', 'serie a',
+            'ligue 1', 'mls', 'liga mx',
             'selección peruana', 'blanquirroja', 'bicolor',
+            
+            # Seguridad y Crimen
+            'los malditos de angamos', 'tren de aragua', 'caracol', 'eln',
+            'vraem', 'sendero luminoso', 'terrorismo',
         ]
         
         # Buscar entidades en el texto
@@ -556,8 +697,8 @@ class NLPAdapter(NLPService):
             country = self.detect_country(text)
             event_date = self.extract_event_date(article)
             
-            # 5. Extraer categorización jerárquica
-            category_main, subcategory, theme = self.extract_hierarchical_category(article, category)
+            # 5. Extraer categorización jerárquica de 5 niveles
+            category_main, subcategory, theme, subtema = self.extract_hierarchical_category(article, category)
             
             # 6. Obtener fuente del artículo
             source = article.source if hasattr(article, 'source') and article.source else "unknown"
@@ -615,7 +756,7 @@ class NLPAdapter(NLPService):
             # Si hay un match válido, agrupar
             if best_match_idx >= 0:
                 # Agregar al topic más similar
-                topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme = topics_by_key[key][best_match_idx]
+                topic_title, topic_summary, topic_tags, article_ids, sources, topic_subcategory, topic_theme, topic_subtema = topics_by_key[key][best_match_idx]
                 updated_tags = topic_tags | tags_set  # Unir tags
                 updated_sources = sources | {source}  # Agregar fuente
                 topics_by_key[key][best_match_idx] = (
@@ -625,7 +766,8 @@ class NLPAdapter(NLPService):
                     article_ids + [article.id],
                     updated_sources,
                     topic_subcategory,  # Mantener subcategoría
-                    topic_theme  # Mantener tema
+                    topic_theme,  # Mantener tema
+                    topic_subtema  # Mantener subtema
                 )
             else:
                 # 10. Si no hay similar, crear nuevo topic candidato
@@ -639,7 +781,8 @@ class NLPAdapter(NLPService):
                     [article.id],
                     {source},  # Set de fuentes
                     subcategory,
-                    theme
+                    theme,
+                    subtema  # Nivel 4
                 ))
         
         print(f"  ⊗ Artículos descartados (sin tags relevantes/spam): {discarded}")
@@ -651,7 +794,7 @@ class NLPAdapter(NLPService):
         rejected_low_quality = 0
         
         for (category, subcategory_key, country, event_date), topics_list in topics_by_key.items():
-            for topic_title, topic_summary, tags, article_ids, sources, subcategory, theme in topics_list:
+            for topic_title, topic_summary, tags, article_ids, sources, subcategory, theme, subtema in topics_list:
                 num_articles = len(article_ids)
                 num_sources = len(sources)
                 
@@ -709,6 +852,7 @@ class NLPAdapter(NLPService):
                     category=category,
                     subcategory=subcategory,
                     topic_theme=theme,
+                    topic_subtema=subtema,  # Nivel 4
                     country=country if country != "General" else None,
                     tags=formatted_tags,
                     event_date=event_date,

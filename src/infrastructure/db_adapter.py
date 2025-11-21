@@ -94,14 +94,14 @@ class NeonDBAdapter(ArticleRepository):
             # 3. Usar imagen real del artículo más relevante
             main_image = best_image_url if best_image_url else topic.main_image_url
 
-            # 4. Insertar Tópico con nuevos campos jerárquicos
+            # 4. Insertar Tópico con jerarquía de 5 niveles
             insert_topic_query = """
                 INSERT INTO topics (
                     title, summary, main_image_url, priority, category, 
-                    subcategory, topic_theme, country, tags, event_date,
+                    subcategory, topic_theme, topic_subtema, country, tags, event_date,
                     article_links, created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) 
                 RETURNING id;
             """
             cursor.execute(insert_topic_query, (
@@ -112,6 +112,7 @@ class NeonDBAdapter(ArticleRepository):
                 topic.category,
                 topic.subcategory,
                 topic.topic_theme,
+                topic.topic_subtema,  # Nivel 4
                 topic.country,
                 topic.tags,  # Formato "#tag,#tag,#tag"
                 topic.event_date,
@@ -127,9 +128,12 @@ class NeonDBAdapter(ArticleRepository):
             
             conn.commit()
             
-            # Log con información de relevancia
+            # Log con información de relevancia y jerarquía completa
             avg_relevance = sum(x['relevance_score'] for x in links_data) / len(links_data) if links_data else 0
-            print(f"✓ Tópico #{new_topic_id} creado: {topic.category} → {topic.subcategory} → {topic.topic_theme} [{topic.country}] ({len(article_ids)} artículos, relevancia promedio: {avg_relevance:.1f}%)")
+            hierarchy = f"{topic.category} → {topic.subcategory} → {topic.topic_theme}"
+            if topic.topic_subtema and topic.topic_subtema != "General":
+                hierarchy += f" → {topic.topic_subtema}"
+            print(f"✓ Tópico #{new_topic_id} creado: {hierarchy} [{topic.country}] ({len(article_ids)} artículos, relevancia: {avg_relevance:.1f}%)")
         
         except Exception as e:
             conn.rollback()
