@@ -3,6 +3,10 @@ from typing import List, Optional, Dict, Tuple
 from datetime import datetime, date
 from src.core.ports import NLPService
 from src.core.domain import Article, TopicData
+from src.adapters.ai_adapter import AIServiceFactory
+from src.services.categorization_service import CategorizationService
+from src.services.tag_extraction_service import TagExtractionService
+from src.services.country_detection_service import CountryDetectionService
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
@@ -10,6 +14,7 @@ import nltk
 from nltk.corpus import stopwords
 import re
 import ssl
+import os
 
 # Descarga de recursos de NLTK (solo la primera vez)
 try:
@@ -29,6 +34,35 @@ except LookupError:
 SPANISH_STOPWORDS = set(stopwords.words('spanish'))
 
 class NLPAdapter(NLPService):
+    def __init__(self, use_ai: bool = True, ai_provider: str = "groq"):
+        """
+        Inicializa el adaptador NLP con servicios especializados
+        
+        Args:
+            use_ai: Si es True, usa IA. Si es False, usa solo fallbacks
+            ai_provider: Proveedor de IA ('groq' [GRATIS], 'ollama', 'openai', 'claude')
+        
+        Recomendado para GitHub Actions: 'groq' (gratis, sin instalación, ultra-rápido)
+        """
+        # Inicializar adapter de IA (agnóstico del proveedor)
+        ai_adapter = None
+        if use_ai:
+            try:
+                ai_adapter = AIServiceFactory.create_adapter(ai_provider)
+                if ai_adapter.is_available():
+                    print(f"✨ IA activada: {ai_provider}")
+                else:
+                    print(f"⚠️ {ai_provider} no disponible, usando fallbacks")
+                    ai_adapter = None
+            except Exception as e:
+                print(f"⚠️ Error inicializando {ai_provider}: {e}")
+                ai_adapter = None
+        
+        # Inicializar servicios especializados (inyección de dependencias)
+        self.categorization_service = CategorizationService(ai_adapter)
+        self.tag_extraction_service = TagExtractionService(ai_adapter)
+        self.country_detection_service = CountryDetectionService()
+    
     def preprocess(self, text: str) -> str:
         """Limpieza básica de texto en español."""
         if not text:
@@ -38,44 +72,6 @@ class NLPAdapter(NLPService):
         words = text.split()
         words = [word for word in words if word not in SPANISH_STOPWORDS]
         return " ".join(words)
-
-    def categorize_article(self, text: str) -> str:
-        """Categoriza un artículo basándose en palabras clave."""
-        text_lower = text.lower()
-        
-        # Política
-        if any(word in text_lower for word in ['congreso', 'presidente', 'ministr', 'legisl', 'gobierno', 'elecciones', 'partido', 'dina boluarte', 'castillo', 'fujimori']):
-            return "Política"
-        
-        # Economía
-        if any(word in text_lower for word in ['economía', 'dólar', 'inflación', 'banco central', 'bcr', 'precio', 'mercado', 'inversión', 'comercio', 'exportación', 'pbi', 'sunat']):
-            return "Economía"
-        
-        # Seguridad
-        if any(word in text_lower for word in ['crimen', 'delincuencia', 'robo', 'asalto', 'policía', 'seguridad', 'extorsión', 'secuestro', 'asesinato', 'homicidio']):
-            return "Seguridad"
-        
-        # Deportes
-        if any(word in text_lower for word in ['fútbol', 'deporte', 'selección', 'alianza', 'universitario', 'cristal', 'copa', 'mundial', 'liga', 'gol', 'partido', 'jugador']):
-            return "Deportes"
-        
-        # Salud
-        if any(word in text_lower for word in ['salud', 'hospital', 'médico', 'enfermedad', 'vacuna', 'minsa', 'essalud', 'pandemia', 'covid', 'tratamiento']):
-            return "Salud"
-        
-        # Educación
-        if any(word in text_lower for word in ['educación', 'universidad', 'colegio', 'estudiante', 'profesor', 'minedu', 'examen', 'admisión']):
-            return "Educación"
-        
-        # Internacional
-        if any(word in text_lower for word in ['internacional', 'mundo', 'eeuu', 'china', 'europa', 'rusia', 'brasil', 'argentina', 'venezuela', 'mexico']):
-            return "Internacional"
-        
-        # Cultura
-        if any(word in text_lower for word in ['cultura', 'miss', 'musica', 'concierto', 'talento', 'festival', 'banda']):
-            return "Culura"
-                
-        return "General"
 
     def is_relevant(self, article: Article) -> bool:
         """Determina si un artículo es relevante para procesar."""
@@ -111,46 +107,8 @@ class NLPAdapter(NLPService):
         return set(words[:n])
 
     def detect_country(self, text: str) -> Optional[str]:
-        """
-        Detecta el país mencionado en el texto.
-        Retorna código de país o None si no se detecta.
-        """
-        text_lower = text.lower()
-        
-        # Mapa de países con variantes y contexto
-        country_patterns = {
-            'Perú': ['perú', 'peru', 'peruano', 'peruana', 'lima', 'arequipa', 'cusco', 'callao', 'trujillo'],
-            'Chile': ['chile', 'chileno', 'chilena', 'santiago', 'valparaíso', 'boric', 'piñera'],
-            'Argentina': ['argentina', 'argentino', 'argentina', 'buenos aires', 'milei', 'fernández'],
-            'México': ['méxico', 'mexico', 'mexicano', 'mexicana', 'cdmx', 'ciudad de méxico', 'amlo', 'lópez obrador'],
-            'Colombia': ['colombia', 'colombiano', 'colombiana', 'bogotá', 'petro', 'medellín'],
-            'Brasil': ['brasil', 'brazil', 'brasileño', 'brasileña', 'brasilia', 'são paulo', 'lula', 'bolsonaro'],
-            'Ecuador': ['ecuador', 'ecuatoriano', 'ecuatoriana', 'quito', 'guayaquil', 'noboa'],
-            'Bolivia': ['bolivia', 'boliviano', 'boliviana', 'la paz', 'arce', 'evo morales'],
-            'Venezuela': ['venezuela', 'venezolano', 'venezolana', 'caracas', 'maduro', 'guaidó'],
-            'Paraguay': ['paraguay', 'paraguayo', 'paraguaya', 'asunción'],
-            'Uruguay': ['uruguay', 'uruguayo', 'uruguaya', 'montevideo'],
-            'Estados Unidos': ['estados unidos', 'eeuu', 'usa', 'washington', 'biden', 'trump', 'nueva york', 'california', 'texas'],
-            'España': ['españa', 'español', 'española', 'madrid', 'barcelona', 'sánchez', 'cataluña'],
-            'China': ['china', 'chino', 'china', 'beijing', 'xi jinping', 'shanghái'],
-            'Rusia': ['rusia', 'ruso', 'rusa', 'moscú', 'putin', 'kremlin'],
-            'Ucrania': ['ucrania', 'ucraniano', 'ucraniana', 'kiev', 'zelenski', 'zelenskyy'],
-            'Israel': ['israel', 'israelí', 'jerusalén', 'tel aviv', 'netanyahu'],
-            'Palestina': ['palestina', 'palestino', 'gaza', 'cisjordania', 'hamas'],
-        }
-        
-        # Buscar menciones de países con contexto
-        country_mentions = {}
-        for country, patterns in country_patterns.items():
-            count = sum(1 for pattern in patterns if pattern in text_lower)
-            if count > 0:
-                country_mentions[country] = count
-        
-        # Retornar el país más mencionado
-        if country_mentions:
-            return max(country_mentions, key=country_mentions.get)
-        
-        return None
+        """Detecta el país mencionado en el texto usando el servicio especializado"""
+        return self.country_detection_service.detect(text)
 
     def extract_event_date(self, article: Article) -> Optional[date]:
         """
@@ -169,7 +127,7 @@ class NLPAdapter(NLPService):
 
     def extract_hierarchical_category(self, article: Article, base_category: str) -> Tuple[str, str, str, str]:
         """
-        Extrae categorización jerárquica de 5 niveles:
+        Extrae categorización jerárquica de 5 niveles usando servicio especializado.
         
         Nivel 1 (category): Categoría principal (Política, Deportes, Espectáculos, etc.)
         Nivel 2 (subcategory): Subcategoría específica (Presidente, Fútbol Nacional, Farándula, etc.)
@@ -177,465 +135,12 @@ class NLPAdapter(NLPService):
         Nivel 4 (subtema): Subtema específico (Gabinete, Eliminatorias, Concurso Final, etc.)
         Nivel 5 (title): El título único del topic se genera después
         
-        Retorna:
-        - category, subcategory, theme, subtema
+        Retorna: category, subcategory, theme, subtema
         """
-        text = f"{article.title} {article.description or ''}".lower()
-        
-        category = base_category
-        subcategory = "General"
-        theme = "General"
-        subtema = "General"
-        
-        # POLÍTICA
-        if category == "Política":
-            if any(word in text for word in ['presidente', 'presidencia', 'ejecutivo']):
-                subcategory = "Presidente"
-            elif any(word in text for word in ['congreso', 'legislativo', 'ley', 'proyecto de ley']):
-                subcategory = "Congreso"
-            elif any(word in text for word in ['elecciones', 'electoral', 'votación']):
-                subcategory = "Elecciones"
-            elif any(word in text for word in ['corrupc', 'fiscal', 'investigación']):
-                subcategory = "Corrupción"
-            elif any(word in text for word in ['internacional', 'exterior', 'diplomacia']):
-                subcategory = "Internacional"
-            
-            # Detectar temas específicos - Políticos internacionales
-            if 'trump' in text or 'donald trump' in text:
-                theme = "Donald Trump"
-            elif 'biden' in text or 'joe biden' in text:
-                theme = "Joe Biden"
-            elif 'kamala harris' in text or 'harris' in text:
-                theme = "Kamala Harris"
-            elif 'putin' in text or 'vladimir putin' in text:
-                theme = "Vladimir Putin"
-            elif 'xi jinping' in text or 'xi' in text:
-                theme = "Xi Jinping"
-            elif 'zelenski' in text or 'zelenskyy' in text:
-                theme = "Volodímir Zelenski"
-            elif 'netanyahu' in text or 'benjamin netanyahu' in text:
-                theme = "Benjamin Netanyahu"
-            
-            # Políticos latinoamericanos
-            elif 'milei' in text or 'javier milei' in text:
-                theme = "Javier Milei"
-            elif 'lula' in text or 'lula da silva' in text:
-                theme = "Lula da Silva"
-            elif 'petro' in text or 'gustavo petro' in text:
-                theme = "Gustavo Petro"
-            elif 'maduro' in text or 'nicolás maduro' in text:
-                theme = "Nicolás Maduro"
-            elif 'boric' in text or 'gabriel boric' in text:
-                theme = "Gabriel Boric"
-            
-            # Políticos peruanos
-            elif 'dina boluarte' in text or 'boluarte' in text:
-                theme = "Dina Boluarte"
-                # Subtemas de Dina Boluarte
-                if 'gabinete' in text or 'ministro' in text:
-                    subtema = "Gabinete Ministerial"
-                elif 'viaje' in text or 'rolex' in text:
-                    subtema = "Controversias"
-                elif 'protesta' in text or 'paro' in text:
-                    subtema = "Protestas Sociales"
-            elif 'pedro castillo' in text or 'castillo' in text:
-                theme = "Pedro Castillo"
-                if 'juicio' in text or 'prisión' in text or 'penal' in text:
-                    subtema = "Proceso Judicial"
-                elif 'vacancia' in text or 'golpe' in text:
-                    subtema = "Golpe de Estado"
-            elif 'keiko fujimori' in text or 'fujimori' in text:
-                theme = "Keiko Fujimori"
-                if 'fuerza popular' in text:
-                    subtema = "Fuerza Popular"
-                elif 'juicio' in text or 'prisión' in text:
-                    subtema = "Casos Judiciales"
-            elif 'rafael lópez aliaga' in text or 'lópez aliaga' in text:
-                theme = "Rafael López Aliaga"
-                if 'lima' in text or 'alcalde' in text:
-                    subtema = "Gestión Municipal"
-            elif 'verónika mendoza' in text or 'mendoza' in text:
-                theme = "Verónika Mendoza"
-            elif 'antauro humala' in text or 'antauro' in text:
-                theme = "Antauro Humala"
-            elif 'betsy chávez' in text or 'betsy chavez' in text:
-                theme = "Betsy Chávez"
-                if 'ministro' in text or 'cultura' in text:
-                    subtema = "Gestión Ministerial"
-            
-            # Más políticos peruanos
-            elif 'alberto otárola' in text or 'otárola' in text:
-                theme = "Alberto Otárola"
-            elif 'gustavo adrianzén' in text or 'adrianzén' in text:
-                theme = "Gustavo Adrianzén"
-            elif 'patricia benavides' in text or 'benavides' in text:
-                theme = "Patricia Benavides"
-                if 'fiscal' in text:
-                    subtema = "Fiscalía"
-            
-            # Instituciones y eventos políticos
-            elif 'vacancia' in text:
-                theme = "Vacancia Presidencial"
-            elif 'referéndum' in text or 'referendum' in text:
-                theme = "Referéndum"
-            elif 'censura' in text:
-                theme = "Censura Ministerial"
-            elif 'estado de emergencia' in text or 'toque de queda' in text:
-                theme = "Estado de Emergencia"
-            elif 'votación' in text:
-                theme = "Votacion"
-        
-        # DEPORTES
-        elif category == "Deportes":
-            if any(word in text for word in ['selección', 'mundial', 'eliminatorias', 'bicolor', 'blanquirroja']):
-                subcategory = "Selección Nacional"
-            elif any(word in text for word in ['alianza', 'universitario', 'cristal', 'melgar', 'liga 1', 'cienciano']):
-                subcategory = "Fútbol Nacional"
-            elif any(word in text for word in ['premier', 'la liga', 'champions', 'bundesliga', 'messi', 'ronaldo']):
-                subcategory = "Fútbol Internacional"
-            elif any(word in text for word in ['tenis', 'atp', 'wta']):
-                subcategory = "Tenis"
-            elif any(word in text for word in ['nba', 'baloncesto', 'basketball']):
-                subcategory = "Baloncesto"
-            elif any(word in text for word in ['fórmula 1', 'f1', 'verstappen', 'hamilton']):
-                subcategory = "Fórmula 1"
-            elif any(word in text for word in ['boxeo', 'pelea', 'combate']):
-                subcategory = "Boxeo"
-            elif any(word in text for word in ['vóley', 'voleibol']):
-                subcategory = "Vóley"
-            
-            # Temas específicos - Fútbol internacional
-            if 'messi' in text or 'lionel messi' in text:
-                theme = "Lionel Messi"
-            elif 'cristiano' in text or 'ronaldo' in text:
-                theme = "Cristiano Ronaldo"
-            elif 'neymar' in text:
-                theme = "Neymar"
-            elif 'mbappé' in text or 'mbappe' in text:
-                theme = "Kylian Mbappé"
-            elif 'haaland' in text:
-                theme = "Erling Haaland"
-            
-            # Jugadores peruanos
-            elif 'paolo guerrero' in text or 'guerrero' in text:
-                theme = "Paolo Guerrero"
-            elif 'lapadula' in text or 'gianluca lapadula' in text:
-                theme = "Gianluca Lapadula"
-            elif 'carrillo' in text or 'andré carrillo' in text:
-                theme = "André Carrillo"
-            elif 'cueva' in text or 'christian cueva' in text:
-                theme = "Christian Cueva"
-            elif 'yotún' in text or 'yoshimar yotún' in text:
-                theme = "Yoshimar Yotún"
-            
-            # Clubes peruanos
-            elif 'alianza lima' in text:
-                theme = "Alianza Lima"
-            elif 'universitario' in text:
-                theme = "Universitario"
-            elif 'sporting cristal' in text or 'cristal' in text:
-                theme = "Sporting Cristal"
-            
-            # Eventos deportivos
-            elif 'mundial 2026' in text or 'mundial' in text:
-                theme = "Mundial 2026"
-            elif 'copa américa' in text:
-                theme = "Copa América"
-            elif 'eliminatorias' in text:
-                theme = "Eliminatorias"
-            elif 'copa libertadores' in text or 'libertadores' in text:
-                theme = "Copa Libertadores"
-            elif 'champions league' in text or 'champions' in text:
-                theme = "Champions League"
-        
-        # ECONOMÍA
-        elif category == "Economía":
-            if any(word in text for word in ['dólar', 'tipo de cambio', 'soles']):
-                subcategory = "Tipo de Cambio"
-                theme = "Dólar"
-            elif any(word in text for word in ['banco central', 'bcr', 'tasa de interés']):
-                subcategory = "Banca Central"
-                theme = "Política Monetaria"
-            elif any(word in text for word in ['inflación', 'precio', 'canasta básica']):
-                subcategory = "Inflación"
-                theme = "Precios"
-            elif any(word in text for word in ['empleo', 'trabajo', 'desempleo']):
-                subcategory = "Empleo"
-                theme = "Mercado Laboral"
-            elif any(word in text for word in ['bitcoin', 'criptomoneda', 'crypto']):
-                subcategory = "Criptomonedas"
-                theme = "Bitcoin"
-            elif any(word in text for word in ['bolsa', 'bvl', 'acciones']):
-                subcategory = "Bolsa de Valores"
-                theme = "Mercado Bursátil"
-            
-            # Empresas específicas
-            if 'petro-perú' in text or 'petroperú' in text:
-                theme = "Petro-Perú"
-            elif 'latam' in text:
-                theme = "LATAM Airlines"
-        
-        # SEGURIDAD
-        elif category == "Seguridad":
-            if any(word in text for word in ['extorsión', 'sicariato']):
-                subcategory = "Crimen Organizado"
-                theme = "Extorsión y Sicariato"
-            elif any(word in text for word in ['robo', 'asalto', 'delincuencia']):
-                subcategory = "Delincuencia Común"
-                theme = "Robos y Asaltos"
-            elif any(word in text for word in ['feminicidio', 'violencia de género']):
-                subcategory = "Violencia de Género"
-                theme = "Feminicidio"
-            elif any(word in text for word in ['narcotráfico', 'droga', 'cocaína']):
-                subcategory = "Narcotráfico"
-                theme = "Tráfico de Drogas"
-        
-        # SALUD
-        elif category == "Salud":
-            if any(word in text for word in ['covid', 'coronavirus', 'pandemia']):
-                subcategory = "COVID-19"
-                theme = "Pandemia"
-            elif any(word in text for word in ['vacuna', 'vacunación']):
-                subcategory = "Vacunación"
-                theme = "Campañas de Vacunación"
-            elif any(word in text for word in ['dengue', 'malaria', 'zika']):
-                subcategory = "Enfermedades Tropicales"
-                theme = "Dengue"
-        
-        # TECNOLOGÍA
-        elif category == "Tecnología":
-            if any(word in text for word in ['inteligencia artificial', 'ia', 'chatgpt', 'openai']):
-                subcategory = "Inteligencia Artificial"
-                theme = "ChatGPT y IA"
-            elif any(word in text for word in ['whatsapp', 'instagram', 'facebook', 'tiktok']):
-                subcategory = "Redes Sociales"
-                if 'whatsapp' in text:
-                    theme = "WhatsApp"
-                elif 'instagram' in text:
-                    theme = "Instagram"
-                elif 'tiktok' in text:
-                    theme = "TikTok"
-            elif any(word in text for word in ['iphone', 'apple', 'ios']):
-                subcategory = "Apple"
-                theme = "iPhone"
-            elif any(word in text for word in ['android', 'google', 'pixel']):
-                subcategory = "Google"
-                theme = "Android"
-        
-        # ESPECTÁCULOS (Nueva categoría separada para farándula, concursos, etc)
-        elif category == "Espectáculos":
-            # Farándula Peruana
-            if any(word in text for word in ['magaly', 'gisela', 'ethel pozo', 'janet barboza']):
-                subcategory = "Farándula"
-                if 'magaly medina' in text or 'magaly' in text:
-                    theme = "Magaly Medina"
-                elif 'gisela valcárcel' in text or 'gisela' in text:
-                    theme = "Gisela Valcárcel"
-            elif any(word in text for word in ['pamela franco', 'christian domínguez', 'pamela lópez', 'karla tarazona']):
-                subcategory = "Farándula"
-                theme = "Polémicas de Farándula"
-            
-            # Concursos de Belleza
-            elif any(word in text for word in ['miss universo', 'miss perú', 'miss mundo', 'concurso de belleza', 'sheynnis']):
-                subcategory = "Concursos de Belleza"
-                theme = "Miss Universo"
-                if 'miss perú' in text or 'karla bacigalupo' in text:
-                    subtema = "Miss Perú"
-                elif 'final' in text or 'ganadora' in text or 'corona' in text:
-                    subtema = "Final del Concurso"
-            
-            # Música y Conciertos
-            elif any(word in text for word in ['concierto', 'canción', 'cantante', 'músico']):
-                subcategory = "Música"
-                if 'taylor swift' in text:
-                    theme = "Taylor Swift"
-                elif 'shakira' in text:
-                    theme = "Shakira"
-                elif 'bad bunny' in text:
-                    theme = "Bad Bunny"
-        
-        # CULTURA (Solo arte y eventos culturales serios)
-        elif category == "Cultura":
-            if any(word in text for word in ['cine', 'película', 'film', 'marvel', 'disney']):
-                subcategory = "Cine"
-            elif any(word in text for word in ['televisión', 'serie', 'netflix']):
-                subcategory = "TV y Streaming"
-                if 'netflix' in text:
-                    theme = "Netflix"
-            elif any(word in text for word in ['museo', 'exposición', 'arte', 'pintura']):
-                subcategory = "Arte"
-        
-        # GENERAL (eventos naturales, otros)
-        elif category == "General":
-            if any(word in text for word in ['sismo', 'terremoto', 'temblor']):
-                subcategory = "Desastres Naturales"
-                theme = "Sismo"
-            elif any(word in text for word in ['inundación', 'huaico', 'deslizamiento']):
-                subcategory = "Desastres Naturales"
-                theme = "Inundaciones"
-            elif any(word in text for word in ['incendio', 'fuego']):
-                subcategory = "Desastres"
-                theme = "Incendios"
-            elif any(word in text for word in ['fenómeno del niño', 'niño costero']):
-                subcategory = "Clima"
-                theme = "Fenómeno del Niño"
-        
-        return (category, subcategory, theme, subtema)
-
+        return self.categorization_service.categorize(article, base_category)
     def extract_tags(self, article: Article) -> List[str]:
-        """
-        Extrae tags/entidades importantes del artículo para mejor agrupación.
-        Identifica nombres propios, lugares, organizaciones, eventos específicos.
-        """
-        text = f"{article.title} {article.description or ''}".lower()
-        tags = []
-        
-        # Entidades importantes - nombres propios comunes en noticias peruanas
-        # Lista expandida masivamente para mejor categorización
-        entities = [
-            # Políticos Peruanos - Gobierno y Ejecutivo
-            'dina boluarte', 'pedro castillo', 'martín vizcarra', 'ollanta humala',
-            'alberto fujimori', 'alejandro toledo', 'ppk', 'pedro pablo kuczynski',
-            'alan garcía', 'valentín paniagua', 'alejandro toledo',
-            
-            # Políticos Peruanos - Congreso y Partidos
-            'keiko fujimori', 'rafael lópez aliaga', 'verónika mendoza', 'antauro humala',
-            'vladimir cerrón', 'gino ríos', 'jorge montoya', 'patricia chirinos',
-            'susel paredes', 'maría del carmen alva', 'alejandro soto', 'lady camones',
-            'hernando guerra garcía', 'alex paredes', 'waldemar cerrón',
-            
-            # Políticos Peruanos - Ministerios y Gabinete
-            'betsy chávez', 'ana cecilia gervasi', 'gustavo adrianzén', 'josé arista',
-            'alberto otárola', 'aníbal torres', 'guido bellido', 'héctor béjar',
-            'césar landa', 'luis alberto otárola', 'jorge chávez cresta',
-            
-            # Políticos Peruanos - Poder Judicial y Fiscalía
-            'patricia benavides', 'juan carlos checkley', 'zoraida ávalos', 'pablo sánchez',
-            'domingo pérez', 'josé domingo pérez', 'rafael vela', 'hamilton castro',
-            
-            # Políticos Internacionales - USA
-            'donald trump', 'joe biden', 'kamala harris', 'barack obama',
-            'mike pence', 'ron desantis', 'elon musk',
-            
-            # Políticos Internacionales - Europa y Asia
-            'xi jinping', 'vladimir putin', 'volodímir zelenski', 'emmanuel macron',
-            'boris johnson', 'rishi sunak', 'olaf scholz', 'giorgia meloni',
-            'benjamin netanyahu', 'isaac herzog',
-            
-            # Políticos Latinoamericanos
-            'javier milei', 'lula da silva', 'gustavo petro', 'nicolás maduro',
-            'gabriel boric', 'andrés manuel lópez obrador', 'amlo', 'nayib bukele',
-            'guillermo lasso', 'luis arce', 'santiago peña',
-            
-            # Deportes - Fútbol Peruano
-            'paolo guerrero', 'gianluca lapadula', 'andré carrillo', 'yoshimar yotún',
-            'edison flores', 'christian cueva', 'luis advíncula', 'renato tapia',
-            'sergio peña', 'alexander callens', 'anderson santamaría', 'marcos lópez',
-            'wilder cartagena', 'piero quispe', 'jorge fossati', 'juan reynoso',
-            'ricardo gareca', 'josé guillermo del solar',
-            
-            # Deportes - Clubes Peruanos
-            'alianza lima', 'universitario', 'sporting cristal', 'melgar', 'cienciano',
-            'sport boys', 'deportivo municipal', 'cusco fc', 'mannucci',
-            
-            # Deportes - Internacional
-            'lionel messi', 'cristiano ronaldo', 'neymar', 'kylian mbappé',
-            'erling haaland', 'vinícius júnior', 'jude bellingham',
-            
-            # Espectáculos y Farándula Peruana
-            'magaly medina', 'gisela valcárcel', 'ethel pozo', 'brunella horna',
-            'janet barboza', 'pamela franco', 'christian domínguez', 'pamela lópez',
-            'karla tarazona', 'jefferson farfán', 'yahaira plasencia', 'melissa klug',
-            'leslie shaw', 'jossmery toledo', 'sheyla rojas', 'nicola porcella',
-            'angie arizaga', 'jota benz', 'andrea san martín',
-            
-            # Espectáculos - Internacionales
-            'taylor swift', 'shakira', 'karol g', 'bad bunny', 'peso pluma',
-            'rosalía', 'madonna', 'beyoncé', 'rihanna',
-            
-            # Miss Universo y Concursos
-            'miss universo', 'miss perú', 'karla bacigalupo', 'sheynnis palacios',
-            'alessia rovegno',
-            
-            # Lugares específicos - Perú
-            'lima', 'callao', 'arequipa', 'cusco', 'trujillo', 'piura', 'iquitos',
-            'machu picchu', 'línea 2', 'panamericana', 'evitamiento', 'aeropuerto jorge chávez',
-            'gamarra', 'mesa redonda', 'cercado de lima', 'miraflores', 'san isidro',
-            
-            # Eventos Políticos y Sociales
-            'mundial 2026', 'copa américa', 'elecciones 2026', 'referéndum',
-            'estado de emergencia', 'toque de queda', 'paro nacional', 'protesta',
-            'marcha', 'plantón', 'huelga',
-            
-            # Eventos Deportivos
-            'copa libertadores', 'champions league', 'euro 2024', 'juegos olímpicos',
-            'eliminatorias', 'mundial qatar', 'liga 1', 'torneo clausura',
-            
-            # Instituciones Públicas Peruanas
-            'congreso', 'poder judicial', 'tribunal constitucional', 'fiscalía',
-            'minsa', 'minedu', 'mtc', 'midis', 'mindef', 'mininter',
-            'sunat', 'bcr', 'banco central', 'indecopi', 'essalud', 'sunafil',
-            'onpe', 'jne', 'reniec', 'sutran', 'osinergmin', 'sunass',
-            'defensoría del pueblo', 'pcm', 'contraloría',
-            
-            # Empresas Peruanas
-            'petro-perú', 'electroperú', 'sedapal', 'enel', 'luz del sur',
-            'edelnor', 'telefónica', 'claro', 'entel', 'bitel',
-            'interbank', 'bcp', 'bbva', 'scotiabank', 'banco de la nación',
-            'saga falabella', 'ripley', 'wong', 'metro', 'plaza vea',
-            
-            # Empresas Internacionales
-            'latam', 'netflix', 'disney+', 'hbo', 'prime video', 'spotify',
-            'uber', 'rappi', 'pedidos ya',
-            
-            # Tecnología
-            'covid-19', 'coronavirus', 'vacuna', 'ómicron', 'dengue',
-            'bitcoin', 'criptomoneda', 'ethereum', 'binance',
-            'inteligencia artificial', 'chatgpt', 'openai', 'gemini', 'claude',
-            'tiktok', 'instagram', 'facebook', 'twitter', 'x', 'whatsapp',
-            'meta', 'google', 'apple', 'microsoft', 'amazon',
-            
-            # Eventos Naturales
-            'sismo', 'terremoto', 'temblor', 'tsunami', 'huracán', 'inundación',
-            'deslizamiento', 'huaico', 'fenómeno del niño', 'niño costero',
-            'sequía', 'helada', 'friaje',
-            
-            # Ligas Deportivas
-            'liga 1', 'premier league', 'la liga', 'bundesliga', 'serie a',
-            'ligue 1', 'mls', 'liga mx',
-            'selección peruana', 'blanquirroja', 'bicolor',
-            
-            # Seguridad y Crimen
-            'los malditos de angamos', 'tren de aragua', 'caracol', 'eln',
-            'vraem', 'sendero luminoso', 'terrorismo',
-        ]
-        
-        # Buscar entidades en el texto
-        for entity in entities:
-            if entity in text:
-                # Normalizar el tag
-                tag = entity.replace(' ', '_')
-                tags.append(tag)
-        
-        # Extraer palabras clave importantes (sustantivos, nombres)
-        words = text.split()
-        important_words = []
-        
-        for i, word in enumerate(words):
-            # Detectar palabras capitalizadas (posibles nombres propios)
-            if len(word) > 4 and word not in SPANISH_STOPWORDS:
-                # Si la palabra aparece al inicio de una frase o es nombre propio
-                if i == 0 or (i > 0 and words[i-1] in ['.', ':', '-']):
-                    important_words.append(word)
-                # Palabras significativas largas
-                elif len(word) > 6:
-                    important_words.append(word)
-        
-        # Agregar las top 5 palabras importantes como tags
-        tags.extend(important_words[:5])
-        
-        # Eliminar duplicados y retornar
-        return list(set(tags))[:15]  # Máximo 15 tags por artículo
+        """Extrae tags/entidades importantes usando el servicio especializado"""
+        return self.tag_extraction_service.extract(article)
 
     def quick_similarity(self, text1: str, text2: str) -> float:
         """Calcula similitud rápida basada en palabras clave compartidas."""

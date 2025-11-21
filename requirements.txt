@@ -2,6 +2,9 @@
 psycopg2-binary
 python-dotenv
 
+# IA y NLP - Groq API (100% GRATIS, ultra-rápido)
+groq>=0.4.0
+
 # Procesamiento de Datos
 pandas
 scikit-learn
