@@ -47,26 +47,31 @@ def main():
     
     try:
         # ================================================================
-        # FASE 1: EXTRACCIÓN DE TAGS (SALTADA)
+        # FASE 1: EXTRACCIÓN DE TAGS
         # ================================================================
-        print_header("FASE 1: EXTRACCIÓN DE TAGS - SALTADA")
+        print_header("FASE 1: EXTRACCIÓN DE TAGS")
         
         from src.infrastructure.db_adapter import NeonDBAdapter
         from src.adapters.local_ai_adapter import AIServiceFactory
+        from src.services.tag_extraction_service import TagExtractionService
         from tqdm import tqdm
-        
-        print("⏭️  Saltando Fase 1 - asumiendo que los artículos ya tienen tags")
-        print()
         
         repository = NeonDBAdapter()
         
-        if False:  # Desactivar completamente la Fase 1
-            ai_adapter = AIServiceFactory.create_adapter("local")
-            articles = repository.fetch_unprocessed_articles()
-            
+        # Verificar si hay artículos sin tags
+        articles = repository.fetch_unprocessed_articles()
+        
+        if not articles:
+            print("✅ No hay artículos sin tags para procesar")
+            print()
+        else:
+            print(f"📊 Total de artículos sin tags: {len(articles)}")
             print()
             print("🤖 Extrayendo tags con IA local...")
             print()
+            
+            ai_adapter = AIServiceFactory.create_adapter("local")
+            tag_service = TagExtractionService(ai_adapter)
             
             processed = 0
             errors = 0
@@ -92,6 +97,7 @@ def main():
             print()
             print(f"✅ Fase 1 completada: {processed}/{len(articles)} artículos con tags")
             print(f"   Errores: {errors}")
+            print()
         
         # ================================================================
         # FASE 2: CLUSTERING
